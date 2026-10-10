@@ -1,6 +1,6 @@
 # Respuestas de Copier: NO editar a mano. Las usa `copier update`.
 _commit: v0.3.0
-_src_path: gh:vrojas1015/template-go-grpc-service
+_src_path: gh:dev-plantillas/template-go-grpc-service
 ci_provider: github
 db_schema: issues
 deploy_target: coolify
