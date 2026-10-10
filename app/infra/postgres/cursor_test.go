@@ -3,7 +3,6 @@ package postgres
 import (
 	"encoding/base64"
 	"testing"
-	"time"
 )
 
 const cursorTestID = "0b7e6a8e-6c1f-4c8e-9a51-2f3c4d5e6f70"
@@ -21,8 +20,7 @@ func TestProjectCursorRoundTrip(t *testing.T) {
 }
 
 func TestIssueCursorRoundTrip(t *testing.T) {
-	ts := time.Date(2026, 1, 2, 3, 4, 5, 123456000, time.UTC)
-	in := issueCursor{Priority: 4, CreatedAt: ts.UnixMicro(), ID: cursorTestID}
+	in := issueCursor{Rank: "a0V"}
 
 	out, err := decodeIssueCursor(encodeCursor(in))
 	if err != nil {
@@ -30,9 +28,6 @@ func TestIssueCursorRoundTrip(t *testing.T) {
 	}
 	if out != in {
 		t.Errorf("round trip: got %+v, want %+v", out, in)
-	}
-	if !out.createdAt().Equal(ts) {
-		t.Errorf("createdAt: got %v, want %v", out.createdAt(), ts)
 	}
 }
 
@@ -54,8 +49,12 @@ func TestDecodeCursor_Invalid(t *testing.T) {
 
 	badIssue := []string{
 		"%%%",
-		b64(`{"p":2,"t":0,"i":"` + cursorTestID + `"}`),          // sin timestamp
-		b64(`{"p":"x","t":1,"i":"` + cursorTestID + `"}`),        // prioridad no numérica
+		b64(`{"r":""}`),    // sin rank
+		b64(`{"r":1}`),     // rank no es string
+		b64(`{"r":"~~~"}`), // rank fuera del formato
+		b64(`{"r":"a00"}`), // rank terminado en 0
+		b64(`{"r":"a0","i":"` + cursorTestID + `"}`),             // campo desconocido
+		b64(`{"p":2,"t":1,"i":"` + cursorTestID + `"}`),          // cursor del orden por prioridad (v0.1)
 		encodeCursor(projectCursor{Name: "a", ID: cursorTestID}), // cursor de otro listado
 	}
 	for _, s := range badIssue {

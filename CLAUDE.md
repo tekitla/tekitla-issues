@@ -2,8 +2,10 @@
 
 ## Qué es este servicio
 
-Proyectos e issues de Tekitla (issue 002, rebanada 1): proyectos de un solo
-dueño y sus issues, con tres estados fijos (por hacer, en curso, hecho).
+Proyectos e issues de Tekitla (issue 002, rebanada 1): proyectos dentro de un
+espacio de trabajo (en la rebanada 1, el personal de cada usuario) y sus issues,
+con estados por categoría fija (por hacer, en curso, hecho, descartado) y orden
+manual por `rank`.
 
 - **Contrato**: `issues.v1.IssueService` de `github.com/tekitla/tekitla-protos`
   (`gen/go/issues/v1`): `ListProjects`, `CreateProject`, `ListIssues`,
@@ -15,23 +17,42 @@ dueño y sus issues, con tres estados fijos (por hacer, en curso, hecho).
 - **Identidad**: todo RPC exige `x-user-id` no vacío (si no, `UNAUTHENTICATED`).
   La lee el adapter (`handler/identity.go`) y la pasa como parámetro explícito
   (`ownerUID`) a la capa de aplicación; el dominio no lee el context.
-- **Pertenencia**: todo se filtra por `owner_uid`. Un proyecto ajeno responde
-  `NOT_FOUND` (nunca `PERMISSION_DENIED`, para no revelar que existe).
-  `IssueService` lo verifica con `ProjectRepository.GetByID` antes de tocar issues.
+- **Espacios de trabajo**: cada usuario tiene un espacio personal
+  (`issues.workspaces`, uno por `owner_uid`) que se crea con su primer
+  proyecto (`WorkspaceRepository.EnsurePersonal`, seguro con concurrencia); las
+  lecturas no escriben (`GetPersonal`: sin espacio = sin proyectos). La capa de
+  aplicación resuelve los espacios del usuario (`application/workspaces.go`) y
+  los repos filtran por `workspace_id IN (...)`. Desde la rebanada 3 un espacio
+  es un tenant de `accounts-service` (issue 005) y la lista llega del gateway.
+- **Pertenencia**: todo se filtra por los espacios del usuario. Un proyecto
+  ajeno responde `NOT_FOUND` (nunca `PERMISSION_DENIED`, para no revelar que
+  existe). `IssueService` lo verifica con `ProjectRepository.GetByID` antes de
+  tocar issues. `ListProjects` con un `workspace_id` ajeno devuelve la lista
+  vacía; `CreateProject` en un espacio ajeno, `NOT_FOUND`. `workspace_id` no se
+  valida como UUID (los ids de tenant pueden no serlo): uno desconocido es ajeno.
 
 Reglas de negocio no obvias:
 
 - Key del proyecto: 2–10 letras A-Z o dígitos, empieza con letra. Se recorta y
-  se pasa a mayúsculas (`tk` → `TK`). Única por dueño: duplicada →
-  `ALREADY_EXISTS` con reason `PROJECT_KEY_TAKEN`. Otro dueño puede usar la misma.
+  se pasa a mayúsculas (`tk` → `TK`). Única por espacio: duplicada →
+  `ALREADY_EXISTS` con reason `PROJECT_KEY_TAKEN`. Otro espacio puede usar la misma.
 - Número de issue: correlativo por proyecto desde 1, no se reutiliza. Lo reserva
   `IssueRepository.Create` con `UPDATE projects SET next_issue_number = next_issue_number + 1
   ... RETURNING` en la misma transacción del `INSERT` (lock de fila: seguro con
   concurrencia).
-- Issue nuevo: estado `TODO`; prioridad `UNSPECIFIED` se guarda como `MEDIUM`.
+- Issue nuevo: estado `TODO`; prioridad `UNSPECIFIED` se guarda como `MEDIUM`;
+  `rank` al final del orden del proyecto (`model.RankAfter` del mayor rank,
+  leído en la misma transacción con el lock de la fila del proyecto).
+- `rank`: *fractional indexing* (`model/rank.go`, port de `fractional-indexing`
+  de rocicorp): base 62, se compara byte a byte (columna `COLLATE "C"`), entre
+  dos claves siempre hay otra (`model.RankBetween`, para reordenar en la
+  rebanada 3). Agregar al final da `a0`, `a1`, …, `az`, `b00`.
 - `MoveIssue` con estado `UNSPECIFIED` (o desconocido) → `INVALID_ARGUMENT`.
   Un valor de enum desconocido en el filtro de `ListIssues` también.
-- Orden: proyectos por `name, id`; issues por `priority DESC, created_at DESC, id DESC`.
+- `CANCELED` (`canceled` en la base) es un estado más: `MoveIssue` lo acepta y
+  `ListIssues` sin filtro lo incluye (el panel lo oculta).
+- Orden: proyectos por `name, id`; issues por `rank` (único por proyecto). Un cursor del orden
+  anterior (`v0.1`, por prioridad) responde `INVALID_ARGUMENT`.
 
 Microservicio Go gRPC, interno (Coolify, sin puerto publicado), Postgres en el
 schema `issues`, puerto `5000`. Generado desde la plantilla
@@ -100,10 +121,11 @@ compose, ver `cli/healthcheck.go`) y reflection fuera de prod.
   struct por listado con las columnas de su `ORDER BY` + `id`): pedir `limit+1`
   para `has_next`. Default 50 / máximo 100 en `application/common.go`.
   Cursor mal formado → `INVALID_ARGUMENT`.
-- Tablas: `issues.projects` (único `owner_uid, key`; `next_issue_number`) e
-  `issues.issues` (FK al proyecto, único `project_id, number`; `state` texto
-  `todo|in_progress|done` y `priority` 1..4, ambos con `CHECK`). Timestamps
-  truncados a microsegundos en el repo (`dbNow`).
+- Tablas: `issues.workspaces` (único `owner_uid`), `issues.projects` (FK al
+  espacio, único `workspace_id, key`; `next_issue_number`) e `issues.issues` (FK
+  al proyecto, únicos `project_id, number` y `project_id, rank`; `state` texto
+  `todo|in_progress|done|canceled` y `priority` 1..4, ambos con `CHECK`; `rank`
+  `TEXT COLLATE "C"`). Timestamps truncados a microsegundos en el repo (`dbNow`).
 - JSONB: DTOs unexported separados del dominio + `encoding/json`.
 - Migraciones en `migrations/NNNNNN_desc.{up,down}.sql`, aplicadas a mano
   (`DATABASE_URL=... scripts/apply_migration.sh <qa|prod> <migración>`). Hoy:
@@ -158,7 +180,7 @@ git tag prod-v0.1.0 && git push origin prod-v0.1.0   # prod, automático salvo m
 
 ## Protos
 
-Repo de protos: `github.com/tekitla/tekitla-protos`, hoy en `v0.1.1`
+Repo de protos: `github.com/tekitla/tekitla-protos`, hoy en `v0.2.0`
 (`go.mod`). Paquete Go `github.com/tekitla/tekitla-protos/gen/go/issues/v1`
 (alias `issuesv1`), usado solo en `handler/`, `mapper/` y `cli/main.go`.
 

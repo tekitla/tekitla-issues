@@ -15,13 +15,13 @@ import (
 )
 
 // ProjectToProto convierte un Project del dominio a su mensaje proto.
-// OwnerUID no viaja: el cliente siempre es el dueño.
 func ProjectToProto(m *model.Project) *issuesv1.Project {
 	if m == nil {
 		return nil
 	}
 	return &issuesv1.Project{
 		Id:          m.ID,
+		WorkspaceId: m.WorkspaceID,
 		Key:         m.Key,
 		Name:        m.Name,
 		Description: m.Description,
@@ -52,6 +52,7 @@ func IssueToProto(m *model.Issue) *issuesv1.Issue {
 		Description: m.Description,
 		State:       IssueStateToProto(m.State),
 		Priority:    PriorityToProto(m.Priority),
+		Rank:        m.Rank,
 		CreatedAt:   TimestampToProto(m.CreatedAt),
 		UpdatedAt:   TimestampToProto(m.UpdatedAt),
 	}
@@ -80,6 +81,8 @@ func IssueStateFromProto(s issuesv1.IssueState) model.IssueState {
 		return model.IssueStateInProgress
 	case issuesv1.IssueState_ISSUE_STATE_DONE:
 		return model.IssueStateDone
+	case issuesv1.IssueState_ISSUE_STATE_CANCELED:
+		return model.IssueStateCanceled
 	}
 	return model.IssueState(fmt.Sprintf("unknown(%d)", int32(s)))
 }
@@ -93,6 +96,8 @@ func IssueStateToProto(s model.IssueState) issuesv1.IssueState {
 		return issuesv1.IssueState_ISSUE_STATE_IN_PROGRESS
 	case model.IssueStateDone:
 		return issuesv1.IssueState_ISSUE_STATE_DONE
+	case model.IssueStateCanceled:
+		return issuesv1.IssueState_ISSUE_STATE_CANCELED
 	}
 	return issuesv1.IssueState_ISSUE_STATE_UNSPECIFIED
 }

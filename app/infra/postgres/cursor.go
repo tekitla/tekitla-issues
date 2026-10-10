@@ -6,14 +6,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/tekitla/tekitla-issues/app/domain/model"
 )
 
 // Cursores keyset opacos: JSON compacto en base64 URL-safe. Cada listado
 // tiene su propio struct con las columnas de su ORDER BY (más el id como
-// desempate estable). JSON en vez de un formato con separadores porque los
+// desempate estable, salvo que la columna ya sea única). JSON en vez de un formato con separadores porque los
 // nombres de proyecto pueden contener cualquier carácter.
 //
 // Un cursor mal formado es un error del cliente: el repo lo traduce a
@@ -25,15 +26,12 @@ type projectCursor struct {
 	ID   string `json:"i"`
 }
 
-// issueCursor: orden (priority DESC, created_at DESC, id DESC).
-// CreatedAt va en microsegundos (la precisión de timestamptz).
+// issueCursor: orden (rank ASC). rank es único por proyecto, así que no hace
+// falta id como desempate. Los cursores del orden anterior (prioridad, con
+// campos "p", "t" e "i") no decodifican: DisallowUnknownFields.
 type issueCursor struct {
-	Priority  int    `json:"p"`
-	CreatedAt int64  `json:"t"`
-	ID        string `json:"i"`
+	Rank string `json:"r"`
 }
-
-func (c issueCursor) createdAt() time.Time { return time.UnixMicro(c.CreatedAt).UTC() }
 
 // encodeCursor codifica cualquier struct de cursor en un string opaco.
 func encodeCursor(v any) string {
@@ -76,11 +74,8 @@ func decodeIssueCursor(s string) (issueCursor, error) {
 	if err := decodeCursor(s, &c); err != nil {
 		return issueCursor{}, err
 	}
-	if _, err := uuid.Parse(c.ID); err != nil {
-		return issueCursor{}, errors.New("invalid cursor id")
-	}
-	if c.CreatedAt <= 0 {
-		return issueCursor{}, errors.New("invalid cursor timestamp")
+	if model.ValidateRank(c.Rank) != nil {
+		return issueCursor{}, errors.New("invalid cursor rank")
 	}
 	return c, nil
 }

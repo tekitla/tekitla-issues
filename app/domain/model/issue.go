@@ -8,7 +8,9 @@ const (
 	IssueDescriptionMaxLen = 20000
 )
 
-// IssueState es la columna del tablero. En la rebanada 1 los estados son fijos.
+// IssueState es la categoría fija del estado de un issue. En la rebanada 1 hay
+// un estado por categoría; los estados configurables por proyecto (rebanada 3)
+// se cuelgan de una de estas categorías.
 //
 // El valor vacío significa "sin especificar": como filtro de ListIssues es
 // "todos los estados"; como destino de MoveIssue es inválido.
@@ -20,13 +22,15 @@ const (
 	IssueStateTodo        IssueState = "todo"
 	IssueStateInProgress  IssueState = "in_progress"
 	IssueStateDone        IssueState = "done"
+	// IssueStateCanceled es "descartado": cerrado sin hacerse.
+	IssueStateCanceled IssueState = "canceled"
 )
 
-// IsValid informa si el estado es uno de los tres estados fijos (el vacío no
+// IsValid informa si el estado es una de las categorías fijas (el vacío no
 // lo es).
 func (s IssueState) IsValid() bool {
 	switch s {
-	case IssueStateTodo, IssueStateInProgress, IssueStateDone:
+	case IssueStateTodo, IssueStateInProgress, IssueStateDone, IssueStateCanceled:
 		return true
 	}
 	return false
@@ -64,8 +68,11 @@ type Issue struct {
 	Description string
 	State       IssueState
 	Priority    Priority
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// Rank es la posición en el orden manual del proyecto (ver rank.go). La
+	// asigna el repo al crear: al final del orden.
+	Rank      string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // NormalizeIssueTitle recorta espacios y valida que el título no sea vacío ni

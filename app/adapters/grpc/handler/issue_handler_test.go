@@ -3,6 +3,7 @@ package handler_test
 import (
 	"context"
 	"net"
+	"slices"
 	"sort"
 	"sync"
 	"testing"
@@ -31,32 +32,58 @@ import (
 //
 // La lógica se testea en app/application; acá alcanza con el recorrido.
 
-// memStore implementa port.ProjectRepository y port.IssueRepository en memoria
-// (sin paginación: devuelve todo en una página).
+// memStore implementa port.WorkspaceRepository, port.ProjectRepository y
+// port.IssueRepository en memoria (sin paginación: devuelve todo en una página).
 type memStore struct {
-	mu       sync.Mutex
-	projects map[string]*model.Project
-	next     map[string]int32
-	issues   []*model.Issue
+	mu         sync.Mutex
+	workspaces map[string]*model.Workspace // por owner_uid
+	projects   map[string]*model.Project
+	next       map[string]int32
+	issues     []*model.Issue
 }
 
 func newMemStore() *memStore {
-	return &memStore{projects: map[string]*model.Project{}, next: map[string]int32{}}
+	return &memStore{
+		workspaces: map[string]*model.Workspace{},
+		projects:   map[string]*model.Project{},
+		next:       map[string]int32{},
+	}
 }
 
+type memWorkspaces struct{ *memStore }
 type memProjects struct{ *memStore }
 type memIssues struct{ *memStore }
 
 var (
-	_ port.ProjectRepository = memProjects{}
-	_ port.IssueRepository   = memIssues{}
+	_ port.WorkspaceRepository = memWorkspaces{}
+	_ port.ProjectRepository   = memProjects{}
+	_ port.IssueRepository     = memIssues{}
 )
+
+func (s memWorkspaces) GetPersonal(_ context.Context, ownerUID string) (*model.Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if ws, ok := s.workspaces[ownerUID]; ok {
+		return ws, nil
+	}
+	return nil, domainerrors.NotFoundError("workspace not found", nil)
+}
+
+func (s memWorkspaces) EnsurePersonal(_ context.Context, ws *model.Workspace) (*model.Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if existing, ok := s.workspaces[ws.OwnerUID]; ok {
+		return existing, nil
+	}
+	s.workspaces[ws.OwnerUID] = ws
+	return ws, nil
+}
 
 func (s memProjects) Create(_ context.Context, p *model.Project) (*model.Project, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, other := range s.projects {
-		if other.OwnerUID == p.OwnerUID && other.Key == p.Key {
+		if other.WorkspaceID == p.WorkspaceID && other.Key == p.Key {
 			return nil, domainerrors.ConflictError("project already exists", nil)
 		}
 	}
@@ -66,21 +93,21 @@ func (s memProjects) Create(_ context.Context, p *model.Project) (*model.Project
 	return p, nil
 }
 
-func (s memProjects) GetByID(_ context.Context, ownerUID, id string) (*model.Project, error) {
+func (s memProjects) GetByID(_ context.Context, workspaceIDs []string, id string) (*model.Project, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if p, ok := s.projects[id]; ok && p.OwnerUID == ownerUID {
+	if p, ok := s.projects[id]; ok && slices.Contains(workspaceIDs, p.WorkspaceID) {
 		return p, nil
 	}
 	return nil, domainerrors.NotFoundError("project not found", nil)
 }
 
-func (s memProjects) List(_ context.Context, ownerUID string, _ port.PageFilter) (*port.ProjectPage, error) {
+func (s memProjects) List(_ context.Context, workspaceIDs []string, _ port.PageFilter) (*port.ProjectPage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	page := &port.ProjectPage{}
 	for _, p := range s.projects {
-		if p.OwnerUID == ownerUID {
+		if slices.Contains(workspaceIDs, p.WorkspaceID) {
 			page.Projects = append(page.Projects, p)
 		}
 	}
@@ -88,12 +115,23 @@ func (s memProjects) List(_ context.Context, ownerUID string, _ port.PageFilter)
 	return page, nil
 }
 
-func (s memIssues) Create(_ context.Context, ownerUID string, issue *model.Issue) (*model.Issue, error) {
+func (s memIssues) Create(_ context.Context, workspaceIDs []string, issue *model.Issue) (*model.Issue, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if p, ok := s.projects[issue.ProjectID]; !ok || p.OwnerUID != ownerUID {
+	if p, ok := s.projects[issue.ProjectID]; !ok || !slices.Contains(workspaceIDs, p.WorkspaceID) {
 		return nil, domainerrors.NotFoundError("project not found", nil)
 	}
+	last := ""
+	for _, it := range s.issues {
+		if it.ProjectID == issue.ProjectID && it.Rank > last {
+			last = it.Rank
+		}
+	}
+	rank, err := model.RankAfter(last)
+	if err != nil {
+		return nil, err
+	}
+	issue.Rank = rank
 	issue.Number = s.next[issue.ProjectID]
 	s.next[issue.ProjectID]++
 	issue.CreatedAt, issue.UpdatedAt = time.Now(), time.Now()
@@ -128,13 +166,7 @@ func (s memIssues) List(_ context.Context, f port.IssueFilter) (*port.IssuePage,
 			page.Issues = append(page.Issues, it)
 		}
 	}
-	sort.SliceStable(page.Issues, func(i, j int) bool {
-		a, b := page.Issues[i], page.Issues[j]
-		if a.Priority != b.Priority {
-			return a.Priority > b.Priority
-		}
-		return a.Number > b.Number
-	})
+	sort.Slice(page.Issues, func(i, j int) bool { return page.Issues[i].Rank < page.Issues[j].Rank })
 	return page, nil
 }
 
@@ -153,10 +185,10 @@ func newClient(t *testing.T) issuesv1.IssueServiceClient {
 	t.Helper()
 
 	store := newMemStore()
-	projects, issues := memProjects{store}, memIssues{store}
+	workspaces, projects, issues := memWorkspaces{store}, memProjects{store}, memIssues{store}
 	h := handler.NewIssueHandler(zap.NewNop(),
-		application.NewProjectService(projects),
-		application.NewIssueService(projects, issues),
+		application.NewProjectService(workspaces, projects),
+		application.NewIssueService(workspaces, projects, issues),
 	)
 
 	lis := bufconn.Listen(1 << 20)
@@ -204,7 +236,7 @@ func TestIssueHandler_Flow(t *testing.T) {
 		t.Fatalf("CreateProject: %v", err)
 	}
 	project := created.GetProject()
-	if project.GetKey() != "TK" || project.GetId() == "" || project.GetCreatedAt() == nil {
+	if project.GetKey() != "TK" || project.GetId() == "" || project.GetWorkspaceId() == "" || project.GetCreatedAt() == nil {
 		t.Fatalf("CreateProject: got %+v", project)
 	}
 
@@ -225,12 +257,18 @@ func TestIssueHandler_Flow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListIssues: %v", err)
 	}
+	// Orden por rank: cada issue nuevo va al final, sin importar la prioridad.
 	var numbers []int32
+	prevRank := ""
 	for _, it := range list.GetIssues() {
 		numbers = append(numbers, it.GetNumber())
+		if it.GetRank() <= prevRank {
+			t.Errorf("issue %d: rank %q not after %q", it.GetNumber(), it.GetRank(), prevRank)
+		}
+		prevRank = it.GetRank()
 	}
-	if len(numbers) != 3 || numbers[0] != 2 || numbers[1] != 1 || numbers[2] != 3 {
-		t.Errorf("ListIssues order: got %v, want [2 1 3]", numbers)
+	if !slices.Equal(numbers, []int32{1, 2, 3}) {
+		t.Errorf("ListIssues order: got %v, want [1 2 3]", numbers)
 	}
 
 	moved, err := client.MoveIssue(ctx, &issuesv1.MoveIssueRequest{ProjectId: project.GetId(), Number: 2, State: issuesv1.IssueState_ISSUE_STATE_IN_PROGRESS})
@@ -254,9 +292,23 @@ func TestIssueHandler_Flow(t *testing.T) {
 		t.Errorf("ListIssues TODO: got %d issues, err %v", len(filtered.GetIssues()), err)
 	}
 
+	canceled, err := client.MoveIssue(ctx, &issuesv1.MoveIssueRequest{ProjectId: project.GetId(), Number: 3, State: issuesv1.IssueState_ISSUE_STATE_CANCELED})
+	if err != nil || canceled.GetIssue().GetState() != issuesv1.IssueState_ISSUE_STATE_CANCELED {
+		t.Errorf("MoveIssue CANCELED: got %+v, err %v", canceled.GetIssue(), err)
+	}
+
 	projects, err := client.ListProjects(ctx, &issuesv1.ListProjectsRequest{})
 	if err != nil || len(projects.GetProjects()) != 1 || projects.GetPage().GetHasNext() {
 		t.Errorf("ListProjects: got %+v, err %v", projects, err)
+	}
+	ws := project.GetWorkspaceId()
+	inWorkspace, err := client.ListProjects(ctx, &issuesv1.ListProjectsRequest{WorkspaceId: ws})
+	if err != nil || len(inWorkspace.GetProjects()) != 1 || inWorkspace.GetProjects()[0].GetWorkspaceId() != ws {
+		t.Errorf("ListProjects workspace_id propio: got %+v, err %v", inWorkspace, err)
+	}
+	second, err := client.CreateProject(ctx, &issuesv1.CreateProjectRequest{WorkspaceId: ws, Key: "OT", Name: "Otro"})
+	if err != nil || second.GetProject().GetWorkspaceId() != ws {
+		t.Errorf("CreateProject en workspace_id propio: got %+v, err %v", second.GetProject(), err)
 	}
 }
 
@@ -281,7 +333,7 @@ func TestIssueHandler_ErrorCodes(t *testing.T) {
 	_, err = client.ListIssues(asUser(t, "   "), &issuesv1.ListIssuesRequest{ProjectId: pid})
 	wantCode(t, "x-user-id en blanco", err, codes.Unauthenticated)
 
-	// Proyecto de otro dueño: NOT_FOUND (no PERMISSION_DENIED).
+	// Proyecto de otro espacio: NOT_FOUND (no PERMISSION_DENIED).
 	other := asUser(t, "u2")
 	_, err = client.ListIssues(other, &issuesv1.ListIssuesRequest{ProjectId: pid})
 	wantCode(t, "ListIssues ajeno", err, codes.NotFound)
@@ -290,7 +342,14 @@ func TestIssueHandler_ErrorCodes(t *testing.T) {
 	if res, err := client.ListProjects(other, &issuesv1.ListProjectsRequest{}); err != nil || len(res.GetProjects()) != 0 {
 		t.Errorf("ListProjects de u2: got %+v, err %v", res, err)
 	}
-	// La misma key para otro dueño sí se puede.
+	// Espacio de otro usuario: lista vacía al listar, NOT_FOUND al crear.
+	ws := created.GetProject().GetWorkspaceId()
+	if res, err := client.ListProjects(other, &issuesv1.ListProjectsRequest{WorkspaceId: ws}); err != nil || len(res.GetProjects()) != 0 {
+		t.Errorf("ListProjects de u2 en el espacio de u1: got %+v, err %v", res, err)
+	}
+	_, err = client.CreateProject(other, &issuesv1.CreateProjectRequest{WorkspaceId: ws, Key: "XX", Name: "x"})
+	wantCode(t, "CreateProject en espacio ajeno", err, codes.NotFound)
+	// La misma key en otro espacio sí se puede.
 	if _, err := client.CreateProject(other, &issuesv1.CreateProjectRequest{Key: "TK", Name: "Otro"}); err != nil {
 		t.Errorf("CreateProject TK de u2: %v", err)
 	}

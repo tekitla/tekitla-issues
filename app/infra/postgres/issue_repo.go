@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 
 	"gorm.io/gorm"
@@ -15,8 +16,9 @@ import (
 )
 
 // issueRow es la fila de issues.issues. State se guarda como texto
-// ('todo' | 'in_progress' | 'done') y Priority como entero 1..4 para poder
-// ordenar por ella; ambos con CHECK en la migración.
+// ('todo' | 'in_progress' | 'done' | 'canceled') y Priority como entero 1..4;
+// ambos con CHECK en la migración. Rank es TEXT COLLATE "C": Postgres lo
+// ordena byte a byte, igual que model.RankBetween.
 type issueRow struct {
 	ID          string    `gorm:"primaryKey;column:id;type:uuid"`
 	ProjectID   string    `gorm:"column:project_id;type:uuid;not null"`
@@ -25,6 +27,7 @@ type issueRow struct {
 	Description string    `gorm:"column:description;not null"`
 	State       string    `gorm:"column:state;not null"`
 	Priority    int       `gorm:"column:priority;not null"`
+	Rank        string    `gorm:"column:rank;not null"`
 	CreatedAt   time.Time `gorm:"column:created_at"`
 	UpdatedAt   time.Time `gorm:"column:updated_at"`
 }
@@ -42,17 +45,19 @@ func NewIssueRepository(db *gorm.DB) *IssueRepository {
 }
 
 // errProjectNotOwned marca, dentro de la transacción de Create, que el
-// UPDATE del proyecto no afectó filas (no existe o es de otro dueño).
-var errProjectNotOwned = errors.New("project not found for owner")
+// UPDATE del proyecto no afectó filas (no existe o es de otro espacio).
+var errProjectNotOwned = errors.New("project not found in workspaces")
 
-// Create reserva el número y crea el issue en una sola transacción.
+// Create reserva el número, calcula el rank y crea el issue en una sola
+// transacción.
 //
 // La reserva es un UPDATE ... RETURNING sobre la fila del proyecto: toma un
 // lock de fila, así dos CreateIssue concurrentes del mismo proyecto se
-// serializan y nunca reciben el mismo número. Si el INSERT falla, el rollback
-// devuelve el número (no queda hueco); como no hay borrado de issues, un
-// número asignado nunca se reutiliza.
-func (r *IssueRepository) Create(ctx context.Context, ownerUID string, issue *model.Issue) (*model.Issue, error) {
+// serializan y nunca reciben el mismo número ni el mismo rank (el rank nuevo
+// sale del mayor rank del proyecto, leído con el lock tomado). Si el INSERT
+// falla, el rollback devuelve el número (no queda hueco); como no hay borrado
+// de issues, un número asignado nunca se reutiliza.
+func (r *IssueRepository) Create(ctx context.Context, workspaceIDs []string, issue *model.Issue) (*model.Issue, error) {
 	row := toIssueRow(issue)
 	now := dbNow()
 	row.CreatedAt, row.UpdatedAt = now, now
@@ -62,9 +67,9 @@ func (r *IssueRepository) Create(ctx context.Context, ownerUID string, issue *mo
 		err := tx.Raw(
 			`UPDATE issues.projects
 			    SET next_issue_number = next_issue_number + 1
-			  WHERE id = ? AND owner_uid = ?
+			  WHERE id = ? AND workspace_id IN ?
 			RETURNING next_issue_number - 1`,
-			issue.ProjectID, ownerUID,
+			issue.ProjectID, workspaceIDs,
 		).Row().Scan(&number)
 		if errors.Is(err, sql.ErrNoRows) {
 			return errProjectNotOwned
@@ -72,7 +77,25 @@ func (r *IssueRepository) Create(ctx context.Context, ownerUID string, issue *mo
 		if err != nil {
 			return err
 		}
+
+		var last []string
+		err = tx.Model(&issueRow{}).Where("project_id = ?", issue.ProjectID).
+			Order("rank DESC").Limit(1).Pluck("rank", &last).Error
+		if err != nil {
+			return err
+		}
+		lastRank := ""
+		if len(last) == 1 {
+			lastRank = last[0]
+		}
+		rank, err := model.RankAfter(lastRank)
+		if err != nil {
+			// Un rank guardado mal formado es un problema de datos, no del cliente.
+			return fmt.Errorf("rank after %q: %v", lastRank, err)
+		}
+
 		row.Number = number
+		row.Rank = rank
 		return tx.Create(row).Error
 	})
 	if errors.Is(err, errProjectNotOwned) {
@@ -94,8 +117,10 @@ func (r *IssueRepository) GetByNumber(ctx context.Context, projectID string, num
 	return fromIssueRow(&row), nil
 }
 
-// List pagina por keyset (priority DESC, created_at DESC, id DESC), con filtro
+// List pagina por keyset (rank ASC; rank es único por proyecto), con filtro
 // opcional por estado. Pide limit+1 filas para saber si hay página siguiente.
+// Un cursor del orden anterior (prioridad) no decodifica: INVALID_ARGUMENT y
+// el cliente vuelve a la primera página.
 func (r *IssueRepository) List(ctx context.Context, filter port.IssueFilter) (*port.IssuePage, error) {
 	limit := int(filter.Limit)
 
@@ -108,12 +133,12 @@ func (r *IssueRepository) List(ctx context.Context, filter port.IssueFilter) (*p
 		if err != nil {
 			return nil, domainerrors.ValidationError("invalid cursor", map[string]any{"field": "cursor"})
 		}
-		// Todo DESC => el keyset usa "menor que" sobre la tupla completa.
-		query = query.Where("(priority, created_at, id) < (?, ?, ?)", c.Priority, c.createdAt(), c.ID)
+		// Orden ASC => el keyset usa "mayor que".
+		query = query.Where("rank > ?", c.Rank)
 	}
 
 	var rows []issueRow
-	if err := query.Order("priority DESC, created_at DESC, id DESC").Limit(limit + 1).Find(&rows).Error; err != nil {
+	if err := query.Order("rank ASC").Limit(limit + 1).Find(&rows).Error; err != nil {
 		return nil, translateError(err, "issues", "list", map[string]any{"project_id": filter.ProjectID})
 	}
 
@@ -127,11 +152,7 @@ func (r *IssueRepository) List(ctx context.Context, filter port.IssueFilter) (*p
 	}
 	if hasNext && len(rows) > 0 {
 		last := rows[len(rows)-1]
-		page.NextCursor = encodeCursor(issueCursor{
-			Priority:  last.Priority,
-			CreatedAt: last.CreatedAt.UnixMicro(),
-			ID:        last.ID,
-		})
+		page.NextCursor = encodeCursor(issueCursor{Rank: last.Rank})
 	}
 	return page, nil
 }
@@ -164,6 +185,7 @@ func toIssueRow(m *model.Issue) *issueRow {
 		Description: m.Description,
 		State:       string(m.State),
 		Priority:    int(m.Priority),
+		Rank:        m.Rank,
 		CreatedAt:   m.CreatedAt,
 		UpdatedAt:   m.UpdatedAt,
 	}
@@ -178,6 +200,7 @@ func fromIssueRow(r *issueRow) *model.Issue {
 		Description: r.Description,
 		State:       model.IssueState(r.State),
 		Priority:    model.Priority(r.Priority),
+		Rank:        r.Rank,
 		CreatedAt:   r.CreatedAt,
 		UpdatedAt:   r.UpdatedAt,
 	}

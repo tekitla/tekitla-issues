@@ -44,12 +44,13 @@ func main() {
 	telemetry.PrintBanner(infra.Config, infra.Logger)
 
 	// 3. Repositorios
+	workspaceRepo := postgres.NewWorkspaceRepository(infra.DB)
 	projectRepo := postgres.NewProjectRepository(infra.DB)
 	issueRepo := postgres.NewIssueRepository(infra.DB)
 
 	// 4. Servicios de aplicación
-	projectSvc := application.NewProjectService(projectRepo)
-	issueSvc := application.NewIssueService(projectRepo, issueRepo)
+	projectSvc := application.NewProjectService(workspaceRepo, projectRepo)
+	issueSvc := application.NewIssueService(workspaceRepo, projectRepo, issueRepo)
 
 	// 5. Handlers gRPC
 	issueHandler := handler.NewIssueHandler(infra.Logger, projectSvc, issueSvc)
