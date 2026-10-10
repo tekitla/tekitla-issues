@@ -17,7 +17,7 @@ import (
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 
-	examplev1 "github.com/vrojas1015/tequio-issues/gen/go/example/v1"
+	issuesv1 "github.com/vrojas1015/tequio-protos/gen/go/issues/v1"
 
 	"github.com/vrojas1015/tequio-issues/app/adapters/grpc/handler"
 	"github.com/vrojas1015/tequio-issues/app/adapters/grpc/interceptor"
@@ -44,19 +44,21 @@ func main() {
 	telemetry.PrintBanner(infra.Config, infra.Logger)
 
 	// 3. Repositorios
-	itemRepo := postgres.NewItemRepository(infra.DB)
+	projectRepo := postgres.NewProjectRepository(infra.DB)
+	issueRepo := postgres.NewIssueRepository(infra.DB)
 
 	// 4. Servicios de aplicación
-	itemSvc := application.NewItemService(itemRepo)
+	projectSvc := application.NewProjectService(projectRepo)
+	issueSvc := application.NewIssueService(projectRepo, issueRepo)
 
 	// 5. Handlers gRPC
-	itemHandler := handler.NewItemHandler(infra.Logger, itemSvc)
+	issueHandler := handler.NewIssueHandler(infra.Logger, projectSvc, issueSvc)
 
 	// 6. Servidor gRPC
 	grpcServer := grpc.NewServer(
 		grpc.UnaryInterceptor(interceptor.UnaryLogger(infra.Logger, infra.Config.Debug)),
 	)
-	examplev1.RegisterItemServiceServer(grpcServer, itemHandler)
+	issuesv1.RegisterIssueServiceServer(grpcServer, issueHandler)
 
 	// Health: lo usan los probes de Cloud Run y el healthcheck de docker compose.
 	healthSrv := health.NewServer()

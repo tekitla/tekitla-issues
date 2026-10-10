@@ -52,7 +52,7 @@ func (e *DomainError) Error() string { return e.Message }
 // WithReason fija la clave estable del error y devuelve el mismo *DomainError,
 // para encadenarlo sobre cualquier constructor:
 //
-//	domainerrors.ConflictError(msg, details).WithReason("ITEM_NAME_TAKEN")
+//	domainerrors.ConflictError(msg, details).WithReason("PROJECT_KEY_TAKEN")
 func (e *DomainError) WithReason(reason string) *DomainError {
 	e.Reason = reason
 	return e

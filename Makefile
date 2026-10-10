@@ -6,7 +6,7 @@ PROTOS_DIR ?= ../tequio-protos
 
 BIN := bin/issues-service
 
-.PHONY: help run build test test-race vet fmt lint tidy vendor proto up down logs clean workspace workspace-off
+.PHONY: help run build test test-race vet fmt lint tidy vendor up down logs clean workspace workspace-off
 
 ## help: lista los targets
 help:
@@ -48,10 +48,6 @@ tidy:
 ## vendor: genera vendor/ (solo para un docker build local; CI lo genera solo)
 vendor:
 	go mod vendor
-
-## proto: regenera gen/go desde proto/ (buf; plugins vía `go run`)
-proto:
-	buf generate
 
 ## up: levanta Postgres + el servicio con docker compose (genera vendor/ antes)
 up: vendor

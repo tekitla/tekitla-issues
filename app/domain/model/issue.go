@@ -1,0 +1,80 @@
+package model
+
+import "time"
+
+// Límites de Issue.
+const (
+	IssueTitleMaxLen       = 200
+	IssueDescriptionMaxLen = 20000
+)
+
+// IssueState es la columna del tablero. En la rebanada 1 los estados son fijos.
+//
+// El valor vacío significa "sin especificar": como filtro de ListIssues es
+// "todos los estados"; como destino de MoveIssue es inválido.
+type IssueState string
+
+// Estados válidos. El string es el valor que se guarda en issues.issues.state.
+const (
+	IssueStateUnspecified IssueState = ""
+	IssueStateTodo        IssueState = "todo"
+	IssueStateInProgress  IssueState = "in_progress"
+	IssueStateDone        IssueState = "done"
+)
+
+// IsValid informa si el estado es uno de los tres estados fijos (el vacío no
+// lo es).
+func (s IssueState) IsValid() bool {
+	switch s {
+	case IssueStateTodo, IssueStateInProgress, IssueStateDone:
+		return true
+	}
+	return false
+}
+
+// Priority es la prioridad de un issue. El valor numérico define el orden
+// (mayor = más urgente) y es lo que se guarda en la base.
+type Priority int
+
+// Prioridades válidas. 0 es "sin especificar": al crear se guarda como Medium.
+const (
+	PriorityUnspecified Priority = 0
+	PriorityLow         Priority = 1
+	PriorityMedium      Priority = 2
+	PriorityHigh        Priority = 3
+	PriorityUrgent      Priority = 4
+)
+
+// DefaultPriority es la que recibe un issue creado sin prioridad.
+const DefaultPriority = PriorityMedium
+
+// IsValid informa si la prioridad es una de las cuatro definidas.
+func (p Priority) IsValid() bool {
+	return p >= PriorityLow && p <= PriorityUrgent
+}
+
+// Issue es una tarea dentro de un Project. Number es correlativo por proyecto
+// desde 1 y no se reutiliza (lo asigna el repo al crear).
+type Issue struct {
+	ID        string
+	ProjectID string
+	Number    int32
+	Title     string
+	// Description es Markdown.
+	Description string
+	State       IssueState
+	Priority    Priority
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// NormalizeIssueTitle recorta espacios y valida que el título no sea vacío ni
+// exceda IssueTitleMaxLen runas.
+func NormalizeIssueTitle(raw string) (string, error) {
+	return requiredText("title", raw, IssueTitleMaxLen)
+}
+
+// NormalizeIssueDescription recorta espacios y valida el largo (opcional).
+func NormalizeIssueDescription(raw string) (string, error) {
+	return optionalText("description", raw, IssueDescriptionMaxLen)
+}
