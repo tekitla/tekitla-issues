@@ -25,7 +25,7 @@
 
 services:
   app:
-    image: ${IMAGE_REPO:-ghcr.io/vrojas1015/tequio-issues}:${IMAGE_TAG:?}
+    image: ${IMAGE_REPO:-ghcr.io/tekitla/tekitla-issues}:${IMAGE_TAG:?}
     pull_policy: always
     restart: unless-stopped
     depends_on:

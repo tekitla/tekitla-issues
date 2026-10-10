@@ -4,14 +4,14 @@ import (
 	"strings"
 	"testing"
 
-	domainerrors "github.com/vrojas1015/tequio-issues/app/domain/errors"
-	"github.com/vrojas1015/tequio-issues/app/domain/model"
+	domainerrors "github.com/tekitla/tekitla-issues/app/domain/errors"
+	"github.com/tekitla/tekitla-issues/app/domain/model"
 )
 
 func TestNormalizeProjectKey_Valid(t *testing.T) {
 	cases := map[string]string{
-		"TQ":         "TQ",
-		"tq":         "TQ",
+		"TK":         "TK",
+		"tk":         "TK",
 		"  Ab1  ":    "AB1",
 		"A1":         "A1",
 		"ABCDEFGHIJ": "ABCDEFGHIJ",
@@ -47,7 +47,7 @@ func TestNormalizeProjectKey_Invalid(t *testing.T) {
 }
 
 func TestNormalizeProjectName(t *testing.T) {
-	if got, err := model.NormalizeProjectName("  Tequio "); err != nil || got != "Tequio" {
+	if got, err := model.NormalizeProjectName("  Tekitla "); err != nil || got != "Tekitla" {
 		t.Errorf("trim: got %q, %v", got, err)
 	}
 	if _, err := model.NormalizeProjectName(" "); !domainerrors.IsValidation(err) {

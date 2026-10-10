@@ -3,7 +3,7 @@ package port
 import (
 	"context"
 
-	"github.com/vrojas1015/tequio-issues/app/domain/model"
+	"github.com/tekitla/tekitla-issues/app/domain/model"
 )
 
 // IssueFilter parametriza ListIssues. State vacío = todos los estados.

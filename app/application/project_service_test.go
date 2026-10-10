@@ -6,10 +6,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/vrojas1015/tequio-issues/app/application"
-	domainerrors "github.com/vrojas1015/tequio-issues/app/domain/errors"
-	"github.com/vrojas1015/tequio-issues/app/domain/model"
-	"github.com/vrojas1015/tequio-issues/app/domain/port"
+	"github.com/tekitla/tekitla-issues/app/application"
+	domainerrors "github.com/tekitla/tekitla-issues/app/domain/errors"
+	"github.com/tekitla/tekitla-issues/app/domain/model"
+	"github.com/tekitla/tekitla-issues/app/domain/port"
 )
 
 const (
@@ -32,8 +32,8 @@ func TestCreateProject_Success(t *testing.T) {
 	}
 
 	got, err := application.NewProjectService(repo).CreateProject(context.Background(), owner, application.CreateProjectInput{
-		Key:         " tq ",
-		Name:        "  Tequio ",
+		Key:         " tk ",
+		Name:        "  Tekitla ",
 		Description: " tracker ",
 	})
 	if err != nil {
@@ -45,7 +45,7 @@ func TestCreateProject_Success(t *testing.T) {
 	if _, err := uuid.Parse(got.ID); err != nil {
 		t.Errorf("ID should be a generated UUID, got %q", got.ID)
 	}
-	if got.OwnerUID != owner || got.Key != "TQ" || got.Name != "Tequio" || got.Description != "tracker" {
+	if got.OwnerUID != owner || got.Key != "TK" || got.Name != "Tekitla" || got.Description != "tracker" {
 		t.Errorf("project: got %+v", got)
 	}
 }
@@ -62,7 +62,7 @@ func TestCreateProject_Validation(t *testing.T) {
 	for name, in := range map[string]application.CreateProjectInput{
 		"bad key":    {Key: "1X", Name: "n"},
 		"empty key":  {Key: "", Name: "n"},
-		"empty name": {Key: "TQ", Name: " "},
+		"empty name": {Key: "TK", Name: " "},
 	} {
 		if _, err := svc.CreateProject(context.Background(), owner, in); !domainerrors.IsValidation(err) {
 			t.Errorf("%s: expected ValidationError, got %v", name, err)
@@ -71,7 +71,7 @@ func TestCreateProject_Validation(t *testing.T) {
 }
 
 func TestCreateProject_RequiresOwner(t *testing.T) {
-	_, err := application.NewProjectService(&mockProjectRepo{}).CreateProject(context.Background(), " ", application.CreateProjectInput{Key: "TQ", Name: "n"})
+	_, err := application.NewProjectService(&mockProjectRepo{}).CreateProject(context.Background(), " ", application.CreateProjectInput{Key: "TK", Name: "n"})
 	if !isUnauthenticated(err) {
 		t.Fatalf("expected UnauthorizedError, got %v", err)
 	}
@@ -84,7 +84,7 @@ func TestCreateProject_DuplicateKey(t *testing.T) {
 		},
 	}
 
-	_, err := application.NewProjectService(repo).CreateProject(context.Background(), owner, application.CreateProjectInput{Key: "TQ", Name: "n"})
+	_, err := application.NewProjectService(repo).CreateProject(context.Background(), owner, application.CreateProjectInput{Key: "TK", Name: "n"})
 	if !domainerrors.IsConflict(err) {
 		t.Fatalf("expected ConflictError, got %v", err)
 	}
@@ -100,7 +100,7 @@ func TestCreateProject_PropagatesInternal(t *testing.T) {
 			return nil, domainerrors.InternalError("failed to create project", nil)
 		},
 	}
-	_, err := application.NewProjectService(repo).CreateProject(context.Background(), owner, application.CreateProjectInput{Key: "TQ", Name: "n"})
+	_, err := application.NewProjectService(repo).CreateProject(context.Background(), owner, application.CreateProjectInput{Key: "TK", Name: "n"})
 	if !domainerrors.IsInternal(err) {
 		t.Fatalf("expected InternalError, got %v", err)
 	}

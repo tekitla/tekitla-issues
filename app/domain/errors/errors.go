@@ -2,7 +2,7 @@
 //
 // Se importa SIEMPRE con alias para no chocar con el errors de la stdlib:
 //
-//	domainerrors "github.com/vrojas1015/tequio-issues/app/domain/errors"
+//	domainerrors "github.com/tekitla/tekitla-issues/app/domain/errors"
 //
 // Reglas:
 //   - Las capas domain/application/infra devuelven solo *DomainError (vía los

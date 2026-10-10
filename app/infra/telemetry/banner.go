@@ -7,7 +7,7 @@ import (
 	"github.com/fatih/color"
 	"go.uber.org/zap"
 
-	"github.com/vrojas1015/tequio-issues/app/infra/config"
+	"github.com/tekitla/tekitla-issues/app/infra/config"
 )
 
 // PrintBanner imprime un banner ASCII con la configuración clave del servicio.

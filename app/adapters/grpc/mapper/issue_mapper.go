@@ -8,10 +8,10 @@ import (
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	issuesv1 "github.com/vrojas1015/tequio-protos/gen/go/issues/v1"
+	issuesv1 "github.com/tekitla/tekitla-protos/gen/go/issues/v1"
 
-	"github.com/vrojas1015/tequio-issues/app/domain/model"
-	"github.com/vrojas1015/tequio-issues/app/domain/port"
+	"github.com/tekitla/tekitla-issues/app/domain/model"
+	"github.com/tekitla/tekitla-issues/app/domain/port"
 )
 
 // ProjectToProto convierte un Project del dominio a su mensaje proto.

@@ -6,9 +6,9 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
-	"github.com/vrojas1015/tequio-issues/app/infra/config"
-	"github.com/vrojas1015/tequio-issues/app/infra/postgres"
-	"github.com/vrojas1015/tequio-issues/app/infra/telemetry"
+	"github.com/tekitla/tekitla-issues/app/infra/config"
+	"github.com/tekitla/tekitla-issues/app/infra/postgres"
+	"github.com/tekitla/tekitla-issues/app/infra/telemetry"
 )
 
 // Infra agrupa los recursos de infraestructura del servicio.

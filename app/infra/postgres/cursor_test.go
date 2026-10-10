@@ -9,7 +9,7 @@ import (
 const cursorTestID = "0b7e6a8e-6c1f-4c8e-9a51-2f3c4d5e6f70"
 
 func TestProjectCursorRoundTrip(t *testing.T) {
-	in := projectCursor{Name: "Tequio | ñandú \"x\"", ID: cursorTestID}
+	in := projectCursor{Name: "Tekitla | ñandú \"x\"", ID: cursorTestID}
 
 	out, err := decodeProjectCursor(encodeCursor(in))
 	if err != nil {

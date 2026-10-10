@@ -6,7 +6,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 
-	domainerrors "github.com/vrojas1015/tequio-issues/app/domain/errors"
+	domainerrors "github.com/tekitla/tekitla-issues/app/domain/errors"
 )
 
 // pgUniqueViolation es el SQLSTATE de unique_violation.

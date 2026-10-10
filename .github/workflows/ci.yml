@@ -20,7 +20,7 @@
 #   Variables: COOLIFY_URL, COOLIFY_RESOURCE_UUID_QA, COOLIFY_RESOURCE_UUID_PROD
 #   Secret:    COOLIFY_TOKEN
 # Secret (Settings > Secrets):
-#   PROTOS_TOKEN        token de solo lectura al repo de protos (github.com/vrojas1015/tequio-protos)
+#   PROTOS_TOKEN        token de solo lectura al repo de protos (github.com/tekitla/tekitla-protos)
 # =============================================================================
 
 name: ci
@@ -44,7 +44,7 @@ permissions:
 env:
   GO_VERSION: "1.25.8"
   GOWORK: "off"
-  GOPRIVATE: "github.com/vrojas1015/tequio-protos"
+  GOPRIVATE: "github.com/tekitla/tekitla-protos"
 
 jobs:
   # ---------------------------------------------------------------------------
