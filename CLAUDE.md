@@ -2,14 +2,14 @@
 
 ## Qué es este servicio
 
-Proyectos e issues de Tequio (issue 002, rebanada 1): proyectos de un solo
+Proyectos e issues de Tekitla (issue 002, rebanada 1): proyectos de un solo
 dueño y sus issues, con tres estados fijos (por hacer, en curso, hecho).
 
-- **Contrato**: `issues.v1.IssueService` de `github.com/vrojas1015/tequio-protos`
+- **Contrato**: `issues.v1.IssueService` de `github.com/tekitla/tekitla-protos`
   (`gen/go/issues/v1`): `ListProjects`, `CreateProject`, `ListIssues`,
   `GetIssue`, `CreateIssue`, `MoveIssue`. Los comentarios del `.proto` son la
   especificación.
-- **Quién lo llama**: solo el `tequio-gateway` (api-gateway), que autentica y
+- **Quién lo llama**: solo el `tekitla-gateway` (api-gateway), que autentica y
   propaga la identidad en la metadata gRPC `x-user-id` (además `x-roles` y
   `x-request-id`).
 - **Identidad**: todo RPC exige `x-user-id` no vacío (si no, `UNAUTHENTICATED`).
@@ -22,7 +22,7 @@ dueño y sus issues, con tres estados fijos (por hacer, en curso, hecho).
 Reglas de negocio no obvias:
 
 - Key del proyecto: 2–10 letras A-Z o dígitos, empieza con letra. Se recorta y
-  se pasa a mayúsculas (`tq` → `TQ`). Única por dueño: duplicada →
+  se pasa a mayúsculas (`tk` → `TK`). Única por dueño: duplicada →
   `ALREADY_EXISTS` con reason `PROJECT_KEY_TAKEN`. Otro dueño puede usar la misma.
 - Número de issue: correlativo por proyecto desde 1, no se reutiliza. Lo reserva
   `IssueRepository.Create` con `UPDATE projects SET next_issue_number = next_issue_number + 1
@@ -58,7 +58,7 @@ adapters → application → domain ← infra
 | Telemetría | `app/infra/telemetry/` | Zap + banner |
 | Entry point | `cli/main.go` | Solo wiring + ciclo de vida |
 
-Contrato gRPC: repo de protos `github.com/vrojas1015/tequio-protos` (ver
+Contrato gRPC: repo de protos `github.com/tekitla/tekitla-protos` (ver
 "Protos"); handler único `IssueHandler`. Además registra
 `grpc.health.v1` (probes de Cloud Run y `<binario> healthcheck` de docker
 compose, ver `cli/healthcheck.go`) y reflection fuera de prod.
@@ -126,7 +126,7 @@ make build                    # bin/issues-service
 go mod tidy                   # después de tocar imports
 make workspace / workspace-off  # co-desarrollar con un checkout local de los protos
 grpcurl -plaintext localhost:5000 list   # con reflection (no prod)
-grpcurl -plaintext -H 'x-user-id: u1' -d '{"key":"TQ","name":"Tequio"}'   localhost:5000 issues.v1.IssueService/CreateProject
+grpcurl -plaintext -H 'x-user-id: u1' -d '{"key":"TK","name":"Tekitla"}'   localhost:5000 issues.v1.IssueService/CreateProject
 # sin grpcurl local: docker run --rm --network issues-service_default #   fullstorydev/grpcurl:v1.9.3 -plaintext app:5000 list
 ```
 
@@ -158,11 +158,11 @@ git tag prod-v0.1.0 && git push origin prod-v0.1.0   # prod, automático salvo m
 
 ## Protos
 
-Repo de protos: `github.com/vrojas1015/tequio-protos`, hoy en `v0.1.0`
-(`go.mod`). Paquete Go `github.com/vrojas1015/tequio-protos/gen/go/issues/v1`
+Repo de protos: `github.com/tekitla/tekitla-protos`, hoy en `v0.1.1`
+(`go.mod`). Paquete Go `github.com/tekitla/tekitla-protos/gen/go/issues/v1`
 (alias `issuesv1`), usado solo en `handler/`, `mapper/` y `cli/main.go`.
 
-- Versión nueva del contrato: `go get github.com/vrojas1015/tequio-protos@vX.Y.Z`
+- Versión nueva del contrato: `go get github.com/tekitla/tekitla-protos@vX.Y.Z`
   + `go mod tidy`; implementar los RPCs nuevos en `IssueHandler` (el embed de
   `Unimplemented…` los deja en `UNIMPLEMENTED` mientras tanto).
 - Co-desarrollo con un checkout local de los protos: `make workspace`

@@ -16,13 +16,13 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
-	issuesv1 "github.com/vrojas1015/tequio-protos/gen/go/issues/v1"
+	issuesv1 "github.com/tekitla/tekitla-protos/gen/go/issues/v1"
 
-	"github.com/vrojas1015/tequio-issues/app/adapters/grpc/handler"
-	"github.com/vrojas1015/tequio-issues/app/application"
-	domainerrors "github.com/vrojas1015/tequio-issues/app/domain/errors"
-	"github.com/vrojas1015/tequio-issues/app/domain/model"
-	"github.com/vrojas1015/tequio-issues/app/domain/port"
+	"github.com/tekitla/tekitla-issues/app/adapters/grpc/handler"
+	"github.com/tekitla/tekitla-issues/app/application"
+	domainerrors "github.com/tekitla/tekitla-issues/app/domain/errors"
+	"github.com/tekitla/tekitla-issues/app/domain/model"
+	"github.com/tekitla/tekitla-issues/app/domain/port"
 )
 
 // Test de punta a punta del adapter gRPC (sin DB): cliente real -> bufconn ->
@@ -199,12 +199,12 @@ func TestIssueHandler_Flow(t *testing.T) {
 	client := newClient(t)
 	ctx := asUser(t, "u1")
 
-	created, err := client.CreateProject(ctx, &issuesv1.CreateProjectRequest{Key: "tq", Name: "Tequio"})
+	created, err := client.CreateProject(ctx, &issuesv1.CreateProjectRequest{Key: "tk", Name: "Tekitla"})
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
 	project := created.GetProject()
-	if project.GetKey() != "TQ" || project.GetId() == "" || project.GetCreatedAt() == nil {
+	if project.GetKey() != "TK" || project.GetId() == "" || project.GetCreatedAt() == nil {
 		t.Fatalf("CreateProject: got %+v", project)
 	}
 
@@ -264,7 +264,7 @@ func TestIssueHandler_ErrorCodes(t *testing.T) {
 	client := newClient(t)
 	ctx := asUser(t, "u1")
 
-	created, err := client.CreateProject(ctx, &issuesv1.CreateProjectRequest{Key: "TQ", Name: "Tequio"})
+	created, err := client.CreateProject(ctx, &issuesv1.CreateProjectRequest{Key: "TK", Name: "Tekitla"})
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
@@ -291,12 +291,12 @@ func TestIssueHandler_ErrorCodes(t *testing.T) {
 		t.Errorf("ListProjects de u2: got %+v, err %v", res, err)
 	}
 	// La misma key para otro dueño sí se puede.
-	if _, err := client.CreateProject(other, &issuesv1.CreateProjectRequest{Key: "TQ", Name: "Otro"}); err != nil {
-		t.Errorf("CreateProject TQ de u2: %v", err)
+	if _, err := client.CreateProject(other, &issuesv1.CreateProjectRequest{Key: "TK", Name: "Otro"}); err != nil {
+		t.Errorf("CreateProject TK de u2: %v", err)
 	}
 
 	// Duplicado y validaciones.
-	_, err = client.CreateProject(ctx, &issuesv1.CreateProjectRequest{Key: "tq", Name: "Otra vez"})
+	_, err = client.CreateProject(ctx, &issuesv1.CreateProjectRequest{Key: "tk", Name: "Otra vez"})
 	wantCode(t, "key duplicada", err, codes.AlreadyExists)
 	_, err = client.CreateProject(ctx, &issuesv1.CreateProjectRequest{Key: "1X", Name: "x"})
 	wantCode(t, "key inválida", err, codes.InvalidArgument)

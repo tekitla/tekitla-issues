@@ -6,7 +6,7 @@ import (
 
 	"google.golang.org/grpc/metadata"
 
-	domainerrors "github.com/vrojas1015/tequio-issues/app/domain/errors"
+	domainerrors "github.com/tekitla/tekitla-issues/app/domain/errors"
 )
 
 // MetadataUserID es la metadata con el uid que propaga el api-gateway después

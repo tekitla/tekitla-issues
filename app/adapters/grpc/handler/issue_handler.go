@@ -5,11 +5,11 @@ import (
 
 	"go.uber.org/zap"
 
-	issuesv1 "github.com/vrojas1015/tequio-protos/gen/go/issues/v1"
+	issuesv1 "github.com/tekitla/tekitla-protos/gen/go/issues/v1"
 
-	"github.com/vrojas1015/tequio-issues/app/adapters/grpc/mapper"
-	"github.com/vrojas1015/tequio-issues/app/application"
-	domainerrors "github.com/vrojas1015/tequio-issues/app/domain/errors"
+	"github.com/tekitla/tekitla-issues/app/adapters/grpc/mapper"
+	"github.com/tekitla/tekitla-issues/app/application"
+	domainerrors "github.com/tekitla/tekitla-issues/app/domain/errors"
 )
 
 // IssueHandler implementa issuesv1.IssueServiceServer.

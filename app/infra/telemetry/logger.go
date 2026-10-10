@@ -6,7 +6,7 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
-	"github.com/vrojas1015/tequio-issues/app/infra/config"
+	"github.com/tekitla/tekitla-issues/app/infra/config"
 )
 
 var (

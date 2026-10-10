@@ -7,10 +7,10 @@ import (
 
 	"google.golang.org/grpc/codes"
 
-	"github.com/vrojas1015/tequio-issues/app/application"
-	domainerrors "github.com/vrojas1015/tequio-issues/app/domain/errors"
-	"github.com/vrojas1015/tequio-issues/app/domain/model"
-	"github.com/vrojas1015/tequio-issues/app/domain/port"
+	"github.com/tekitla/tekitla-issues/app/application"
+	domainerrors "github.com/tekitla/tekitla-issues/app/domain/errors"
+	"github.com/tekitla/tekitla-issues/app/domain/model"
+	"github.com/tekitla/tekitla-issues/app/domain/port"
 )
 
 // ownedProjects devuelve un repo de proyectos donde validID es de owner y
@@ -19,7 +19,7 @@ func ownedProjects() *mockProjectRepo {
 	return &mockProjectRepo{
 		getByIDFn: func(_ context.Context, ownerUID, id string) (*model.Project, error) {
 			if ownerUID == owner && id == validID {
-				return &model.Project{ID: id, OwnerUID: ownerUID, Key: "TQ"}, nil
+				return &model.Project{ID: id, OwnerUID: ownerUID, Key: "TK"}, nil
 			}
 			return nil, domainerrors.NotFoundError("project not found", map[string]any{"id": id})
 		},

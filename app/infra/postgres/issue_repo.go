@@ -9,9 +9,9 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	domainerrors "github.com/vrojas1015/tequio-issues/app/domain/errors"
-	"github.com/vrojas1015/tequio-issues/app/domain/model"
-	"github.com/vrojas1015/tequio-issues/app/domain/port"
+	domainerrors "github.com/tekitla/tekitla-issues/app/domain/errors"
+	"github.com/tekitla/tekitla-issues/app/domain/model"
+	"github.com/tekitla/tekitla-issues/app/domain/port"
 )
 
 // issueRow es la fila de issues.issues. State se guarda como texto

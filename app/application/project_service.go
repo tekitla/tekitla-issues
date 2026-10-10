@@ -5,9 +5,9 @@ import (
 
 	"github.com/google/uuid"
 
-	domainerrors "github.com/vrojas1015/tequio-issues/app/domain/errors"
-	"github.com/vrojas1015/tequio-issues/app/domain/model"
-	"github.com/vrojas1015/tequio-issues/app/domain/port"
+	domainerrors "github.com/tekitla/tekitla-issues/app/domain/errors"
+	"github.com/tekitla/tekitla-issues/app/domain/model"
+	"github.com/tekitla/tekitla-issues/app/domain/port"
 )
 
 // ProjectService implementa los casos de uso de Project.

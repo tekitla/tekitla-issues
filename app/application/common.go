@@ -5,7 +5,7 @@ import (
 
 	"github.com/google/uuid"
 
-	domainerrors "github.com/vrojas1015/tequio-issues/app/domain/errors"
+	domainerrors "github.com/tekitla/tekitla-issues/app/domain/errors"
 )
 
 // Paginación: default y máximo de limit para todos los listados.

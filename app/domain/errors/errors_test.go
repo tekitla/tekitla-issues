@@ -10,7 +10,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	domainerrors "github.com/vrojas1015/tequio-issues/app/domain/errors"
+	domainerrors "github.com/tekitla/tekitla-issues/app/domain/errors"
 )
 
 func TestConstructorsMapToExpectedCodes(t *testing.T) {

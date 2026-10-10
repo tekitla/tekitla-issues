@@ -8,8 +8,8 @@ docs_repo: ''
 dueño: '@vrojas1015'
 go_version: 1.25.8
 grpc_port: 5000
-module_path: github.com/vrojas1015/tequio-issues
-protos_module: github.com/vrojas1015/tequio-protos
-protos_version: v0.1.0
-service_description: Proyectos e issues de Tequio (issue 002).
+module_path: github.com/tekitla/tekitla-issues
+protos_module: github.com/tekitla/tekitla-protos
+protos_version: v0.1.1
+service_description: Proyectos e issues de Tekitla (issue 002).
 service_name: issues

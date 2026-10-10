@@ -69,7 +69,7 @@ Variables*. Las marcadas con `:?` son obligatorias (el deploy falla si faltan).
 | Variable | QA | Prod | Notas |
 |---|---|---|---|
 | `IMAGE_TAG` | `qa` | `prod` | Tag móvil. Rollback: poné un tag inmutable (`prod-v1.2.2`) y Redeploy |
-| `IMAGE_REPO` | — | — | Opcional. Default `ghcr.io/vrojas1015/tequio-issues` |
+| `IMAGE_REPO` | — | — | Opcional. Default `ghcr.io/tekitla/tekitla-issues` |
 | `APP_ENV` | `development` | `production` | Igual que Cloud Run (QA usa `development`: reflection activo) |
 | `SERVICE_ENV` | `qa` | `production` | |
 | `DEBUG` | `true` | `false` | |

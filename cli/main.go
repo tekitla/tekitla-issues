@@ -17,14 +17,14 @@ import (
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 
-	issuesv1 "github.com/vrojas1015/tequio-protos/gen/go/issues/v1"
+	issuesv1 "github.com/tekitla/tekitla-protos/gen/go/issues/v1"
 
-	"github.com/vrojas1015/tequio-issues/app/adapters/grpc/handler"
-	"github.com/vrojas1015/tequio-issues/app/adapters/grpc/interceptor"
-	"github.com/vrojas1015/tequio-issues/app/application"
-	"github.com/vrojas1015/tequio-issues/app/infra/bootstrap"
-	"github.com/vrojas1015/tequio-issues/app/infra/postgres"
-	"github.com/vrojas1015/tequio-issues/app/infra/telemetry"
+	"github.com/tekitla/tekitla-issues/app/adapters/grpc/handler"
+	"github.com/tekitla/tekitla-issues/app/adapters/grpc/interceptor"
+	"github.com/tekitla/tekitla-issues/app/application"
+	"github.com/tekitla/tekitla-issues/app/infra/bootstrap"
+	"github.com/tekitla/tekitla-issues/app/infra/postgres"
+	"github.com/tekitla/tekitla-issues/app/infra/telemetry"
 )
 
 func main() {

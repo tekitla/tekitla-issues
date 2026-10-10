@@ -5,7 +5,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	domainerrors "github.com/vrojas1015/tequio-issues/app/domain/errors"
+	domainerrors "github.com/tekitla/tekitla-issues/app/domain/errors"
 )
 
 // Límites de Project.
@@ -23,7 +23,7 @@ const (
 type Project struct {
 	ID       string
 	OwnerUID string
-	// Key es la clave corta del proyecto ("TQ"); los issues se nombran TQ-42.
+	// Key es la clave corta del proyecto ("TK"); los issues se nombran TK-42.
 	// Única por dueño.
 	Key         string
 	Name        string
@@ -35,8 +35,8 @@ type Project struct {
 // NormalizeProjectKey recorta espacios, pasa a mayúsculas y valida el formato
 // de la key: 2 a 10 letras A-Z o dígitos, empezando con letra.
 //
-// Pasar a mayúsculas es una comodidad para el cliente (CLI, formularios): "tq"
-// y "TQ" son la misma key, y lo que se guarda y devuelve es siempre "TQ".
+// Pasar a mayúsculas es una comodidad para el cliente (CLI, formularios): "tk"
+// y "TK" son la misma key, y lo que se guarda y devuelve es siempre "TK".
 func NormalizeProjectKey(raw string) (string, error) {
 	key := strings.ToUpper(strings.TrimSpace(raw))
 	if key == "" {
