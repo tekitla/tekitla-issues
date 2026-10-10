@@ -8,6 +8,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
@@ -15,6 +16,12 @@ import (
 // healthMethodPrefix: los probes de Cloud Run pegan cada pocos segundos; no
 // ensuciamos el log con ellos salvo que fallen.
 const healthMethodPrefix = "/grpc.health.v1.Health/"
+
+// Metadata que propaga el api-gateway y que se agrega al log para correlacionar.
+var loggedMetadata = map[string]string{
+	"x-request-id": "request_id",
+	"x-user-id":    "user_id",
+}
 
 // UnaryLogger retorna un interceptor que loguea cada petición gRPC unaria.
 // Con debug=true también loguea el payload del request y la respuesta.
@@ -49,6 +56,13 @@ func UnaryLogger(logger *zap.Logger, debug bool) grpc.UnaryServerInterceptor {
 
 		if p, ok := peer.FromContext(ctx); ok {
 			fields = append(fields, zap.String("peer", p.Addr.String()))
+		}
+		if md, ok := metadata.FromIncomingContext(ctx); ok {
+			for key, field := range loggedMetadata {
+				if v := md.Get(key); len(v) > 0 && v[0] != "" {
+					fields = append(fields, zap.String(field, v[0]))
+				}
+			}
 		}
 
 		switch {
