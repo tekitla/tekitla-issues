@@ -1,44 +1,86 @@
 package postgres
 
 import (
+	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
-	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
-// cursorData son los valores del cursor keyset para PKs UUID:
-// orden (created_at DESC, id DESC).
-type cursorData struct {
-	CreatedAt time.Time
-	ID        string
+// Cursores keyset opacos: JSON compacto en base64 URL-safe. Cada listado
+// tiene su propio struct con las columnas de su ORDER BY (más el id como
+// desempate estable). JSON en vez de un formato con separadores porque los
+// nombres de proyecto pueden contener cualquier carácter.
+//
+// Un cursor mal formado es un error del cliente: el repo lo traduce a
+// ValidationError.
+
+// projectCursor: orden (name ASC, id ASC).
+type projectCursor struct {
+	Name string `json:"n"`
+	ID   string `json:"i"`
 }
 
-// encodeCursor codifica un cursorData en un string opaco (base64 URL-safe).
-func encodeCursor(c cursorData) string {
-	s := fmt.Sprintf("%d|%s", c.CreatedAt.UnixNano(), c.ID)
-	return base64.RawURLEncoding.EncodeToString([]byte(s))
+// issueCursor: orden (priority DESC, created_at DESC, id DESC).
+// CreatedAt va en microsegundos (la precisión de timestamptz).
+type issueCursor struct {
+	Priority  int    `json:"p"`
+	CreatedAt int64  `json:"t"`
+	ID        string `json:"i"`
 }
 
-// decodeCursor decodifica un cursor opaco. Un cursor mal formado es un error
-// del cliente: el repo lo traduce a ValidationError.
-func decodeCursor(s string) (cursorData, error) {
+func (c issueCursor) createdAt() time.Time { return time.UnixMicro(c.CreatedAt).UTC() }
+
+// encodeCursor codifica cualquier struct de cursor en un string opaco.
+func encodeCursor(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		// Solo structs propios con strings e ints: no puede fallar.
+		panic(fmt.Sprintf("encodeCursor: %v", err))
+	}
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+// decodeCursor decodifica s en v (puntero a un struct de cursor) rechazando
+// campos desconocidos.
+func decodeCursor(s string, v any) error {
 	b, err := base64.RawURLEncoding.DecodeString(s)
 	if err != nil {
-		return cursorData{}, fmt.Errorf("invalid cursor encoding: %w", err)
+		return fmt.Errorf("invalid cursor encoding: %w", err)
 	}
-	parts := strings.SplitN(string(b), "|", 2)
-	if len(parts) != 2 || parts[1] == "" {
-		return cursorData{}, errors.New("invalid cursor format")
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		return fmt.Errorf("invalid cursor format: %w", err)
 	}
-	ns, err := strconv.ParseInt(parts[0], 10, 64)
-	if err != nil {
-		return cursorData{}, fmt.Errorf("invalid cursor timestamp: %w", err)
+	return nil
+}
+
+func decodeProjectCursor(s string) (projectCursor, error) {
+	var c projectCursor
+	if err := decodeCursor(s, &c); err != nil {
+		return projectCursor{}, err
 	}
-	return cursorData{
-		CreatedAt: time.Unix(0, ns).UTC(),
-		ID:        parts[1],
-	}, nil
+	if _, err := uuid.Parse(c.ID); err != nil {
+		return projectCursor{}, errors.New("invalid cursor id")
+	}
+	return c, nil
+}
+
+func decodeIssueCursor(s string) (issueCursor, error) {
+	var c issueCursor
+	if err := decodeCursor(s, &c); err != nil {
+		return issueCursor{}, err
+	}
+	if _, err := uuid.Parse(c.ID); err != nil {
+		return issueCursor{}, errors.New("invalid cursor id")
+	}
+	if c.CreatedAt <= 0 {
+		return issueCursor{}, errors.New("invalid cursor timestamp")
+	}
+	return c, nil
 }

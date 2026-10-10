@@ -33,11 +33,11 @@ func TestConstructorsMapToExpectedCodes(t *testing.T) {
 }
 
 func TestMapToGRPC_AttachesErrorInfo(t *testing.T) {
-	err := domainerrors.ConflictError("item already exists", map[string]any{"name": "a", "count": 2}).
-		WithReason("ITEM_NAME_TAKEN")
+	err := domainerrors.ConflictError("project already exists", map[string]any{"name": "a", "count": 2}).
+		WithReason("PROJECT_KEY_TAKEN")
 
 	st := status.Convert(domainerrors.MapToGRPC(err, nil))
-	if st.Message() != "item already exists" {
+	if st.Message() != "project already exists" {
 		t.Errorf("message: got %q", st.Message())
 	}
 
@@ -45,7 +45,7 @@ func TestMapToGRPC_AttachesErrorInfo(t *testing.T) {
 	if info == nil {
 		t.Fatal("expected ErrorInfo detail")
 	}
-	if info.GetReason() != "ITEM_NAME_TAKEN" {
+	if info.GetReason() != "PROJECT_KEY_TAKEN" {
 		t.Errorf("reason: got %q", info.GetReason())
 	}
 	if info.GetDomain() != "issues-service" {

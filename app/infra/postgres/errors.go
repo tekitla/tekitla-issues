@@ -18,7 +18,7 @@ const pgUniqueViolation = "23505"
 //	PG 23505               -> ConflictError
 //	resto                  -> InternalError (con la causa en details)
 //
-// entity se usa en los mensajes ("item not found"); details se adjunta tal cual.
+// entity se usa en los mensajes ("project not found"); details se adjunta tal cual.
 func translateError(err error, entity, op string, details map[string]any) error {
 	if err == nil {
 		return nil

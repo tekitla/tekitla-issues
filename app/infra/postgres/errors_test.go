@@ -11,17 +11,17 @@ import (
 )
 
 func TestTranslateError(t *testing.T) {
-	if translateError(nil, "item", "get", nil) != nil {
+	if translateError(nil, "project", "get", nil) != nil {
 		t.Error("nil must stay nil")
 	}
-	if err := translateError(gorm.ErrRecordNotFound, "item", "get", nil); !domainerrors.IsNotFound(err) {
+	if err := translateError(gorm.ErrRecordNotFound, "project", "get", nil); !domainerrors.IsNotFound(err) {
 		t.Errorf("record not found: got %v", err)
 	}
-	unique := &pgconn.PgError{Code: "23505", ConstraintName: "items_name_key"}
-	if err := translateError(unique, "item", "create", nil); !domainerrors.IsConflict(err) {
+	unique := &pgconn.PgError{Code: "23505", ConstraintName: "projects_owner_uid_key_key"}
+	if err := translateError(unique, "project", "create", nil); !domainerrors.IsConflict(err) {
 		t.Errorf("unique violation: got %v", err)
 	}
-	if err := translateError(errors.New("boom"), "item", "list", nil); !domainerrors.IsInternal(err) {
+	if err := translateError(errors.New("boom"), "project", "list", nil); !domainerrors.IsInternal(err) {
 		t.Errorf("generic error: got %v", err)
 	}
 }
