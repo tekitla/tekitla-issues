@@ -2,10 +2,36 @@
 
 ## Qué es este servicio
 
-Proyectos e issues de Tequio (issue 002).
+Proyectos e issues de Tequio (issue 002, rebanada 1): proyectos de un solo
+dueño y sus issues, con tres estados fijos (por hacer, en curso, hecho).
 
-<!-- TODO: completar. Qué dominio cubre, quién lo llama (gateway, otros micros),
-     qué contrato gRPC implementa y reglas de negocio no obvias. -->
+- **Contrato**: `issues.v1.IssueService` de `github.com/vrojas1015/tequio-protos`
+  (`gen/go/issues/v1`): `ListProjects`, `CreateProject`, `ListIssues`,
+  `GetIssue`, `CreateIssue`, `MoveIssue`. Los comentarios del `.proto` son la
+  especificación.
+- **Quién lo llama**: solo el `tequio-gateway` (api-gateway), que autentica y
+  propaga la identidad en la metadata gRPC `x-user-id` (además `x-roles` y
+  `x-request-id`).
+- **Identidad**: todo RPC exige `x-user-id` no vacío (si no, `UNAUTHENTICATED`).
+  La lee el adapter (`handler/identity.go`) y la pasa como parámetro explícito
+  (`ownerUID`) a la capa de aplicación; el dominio no lee el context.
+- **Pertenencia**: todo se filtra por `owner_uid`. Un proyecto ajeno responde
+  `NOT_FOUND` (nunca `PERMISSION_DENIED`, para no revelar que existe).
+  `IssueService` lo verifica con `ProjectRepository.GetByID` antes de tocar issues.
+
+Reglas de negocio no obvias:
+
+- Key del proyecto: 2–10 letras A-Z o dígitos, empieza con letra. Se recorta y
+  se pasa a mayúsculas (`tq` → `TQ`). Única por dueño: duplicada →
+  `ALREADY_EXISTS` con reason `PROJECT_KEY_TAKEN`. Otro dueño puede usar la misma.
+- Número de issue: correlativo por proyecto desde 1, no se reutiliza. Lo reserva
+  `IssueRepository.Create` con `UPDATE projects SET next_issue_number = next_issue_number + 1
+  ... RETURNING` en la misma transacción del `INSERT` (lock de fila: seguro con
+  concurrencia).
+- Issue nuevo: estado `TODO`; prioridad `UNSPECIFIED` se guarda como `MEDIUM`.
+- `MoveIssue` con estado `UNSPECIFIED` (o desconocido) → `INVALID_ARGUMENT`.
+  Un valor de enum desconocido en el filtro de `ListIssues` también.
+- Orden: proyectos por `name, id`; issues por `priority DESC, created_at DESC, id DESC`.
 
 Microservicio Go gRPC, interno (Coolify, sin puerto publicado), Postgres en el
 schema `issues`, puerto `5000`. Generado desde la plantilla
@@ -26,15 +52,14 @@ adapters → application → domain ← infra
 | Use cases | `app/application/` | Solo dependen de ports |
 | Handlers | `app/adapters/grpc/handler/` | Embeben `Unimplemented…Server`; finos |
 | Mappers | `app/adapters/grpc/mapper/` | Única frontera proto ↔ dominio |
-| Interceptor | `app/adapters/grpc/interceptor/` | Logging gRPC |
+| Interceptor | `app/adapters/grpc/interceptor/` | Logging gRPC (con `request_id` y `user_id` de la metadata) |
 | Repos | `app/infra/postgres/` | Rows unexported + `TableName()` con schema |
 | Wiring | `app/infra/bootstrap/`, `app/infra/config/` | Config (env) + logger + DB |
 | Telemetría | `app/infra/telemetry/` | Zap + banner |
 | Entry point | `cli/main.go` | Solo wiring + ciclo de vida |
 
 Contrato gRPC: repo de protos `github.com/vrojas1015/tequio-protos` (ver
-"Protos"). Mientras no se enchufe, el servicio expone el ejemplo local
-`proto/example/v1/item.proto`. Además registra
+"Protos"); handler único `IssueHandler`. Además registra
 `grpc.health.v1` (probes de Cloud Run y `<binario> healthcheck` de docker
 compose, ver `cli/healthcheck.go`) y reflection fuera de prod.
 
@@ -61,19 +86,29 @@ compose, ver `cli/healthcheck.go`) y reflection fuera de prod.
   método sin setear → zero values.
 - Un `<servicio>_test.go` por service: caso feliz + validaciones + propagación
   de errores del repo.
-- Handlers: un test de punta a punta con `bufconn` alcanza (ver `item_handler_test.go`).
+- Handlers: un test de punta a punta con `bufconn` y repos en memoria alcanza
+  (ver `issue_handler_test.go`: identidad, pertenencia y mapeo de errores).
+- No hay tests de integración contra Postgres: los repos se prueban levantando
+  `make up` y pegándole con `grpcurl` (ver "Comandos").
 
 ## Datos
 
 - PK **UUID** por default, generada en el service (`uuid.NewString()`). PK de
   texto solo si el proto la expone como identificador estable del cliente (y
   entonces upsert con `clause.OnConflict`).
-- Paginación keyset `(created_at, id) DESC` con cursor opaco (`cursor.go`):
-  pedir `limit+1` para `has_next`. Default/máximo de `limit` en el service.
+- Paginación keyset con cursor opaco (`cursor.go`: JSON + base64 URL-safe, un
+  struct por listado con las columnas de su `ORDER BY` + `id`): pedir `limit+1`
+  para `has_next`. Default 50 / máximo 100 en `application/common.go`.
+  Cursor mal formado → `INVALID_ARGUMENT`.
+- Tablas: `issues.projects` (único `owner_uid, key`; `next_issue_number`) e
+  `issues.issues` (FK al proyecto, único `project_id, number`; `state` texto
+  `todo|in_progress|done` y `priority` 1..4, ambos con `CHECK`). Timestamps
+  truncados a microsegundos en el repo (`dbNow`).
 - JSONB: DTOs unexported separados del dominio + `encoding/json`.
 - Migraciones en `migrations/NNNNNN_desc.{up,down}.sql`, aplicadas a mano
-  (`DATABASE_URL=... scripts/apply_migration.sh <qa|prod> <migración>`). Si nada
-  está desplegado, reescribir `000001`. El `docker-compose.yml` local las aplica
+  (`DATABASE_URL=... scripts/apply_migration.sh <qa|prod> <migración>`). Hoy:
+  `000001` crea el schema y `000002` las tablas; mientras nada esté
+  desplegado, corregir esas dos en vez de sumar migraciones. El `docker-compose.yml` local las aplica
   solo al crear el volumen (`docker compose down -v` para empezar de cero).
 - Copiar los datos del servicio entre dos Postgres (con verificación de filas):
   `scripts/migrate_db.sh SRC_URL DST_URL` (dry-run; `--apply` para ejecutar).
@@ -88,10 +123,11 @@ make run                      # levanta el servicio (lee .env.dev)
 make test                     # go test ./... -count=1
 make lint                     # gofmt + go vet (+ golangci-lint si está)
 make build                    # bin/issues-service
-make proto                    # regenera gen/go desde proto/ (buf)
 go mod tidy                   # después de tocar imports
 make workspace / workspace-off  # co-desarrollar con un checkout local de los protos
 grpcurl -plaintext localhost:5000 list   # con reflection (no prod)
+grpcurl -plaintext -H 'x-user-id: u1' -d '{"key":"TQ","name":"Tequio"}'   localhost:5000 issues.v1.IssueService/CreateProject
+# sin grpcurl local: docker run --rm --network issues-service_default #   fullstorydev/grpcurl:v1.9.3 -plaintext app:5000 list
 ```
 
 ## Deploy
@@ -122,30 +158,15 @@ git tag prod-v0.1.0 && git push origin prod-v0.1.0   # prod, automático salvo m
 
 ## Protos
 
-Repo de protos: `github.com/vrojas1015/tequio-protos` (versión inicial `v0.1.0`). Para enchufarlo:
+Repo de protos: `github.com/vrojas1015/tequio-protos`, hoy en `v0.1.0`
+(`go.mod`). Paquete Go `github.com/vrojas1015/tequio-protos/gen/go/issues/v1`
+(alias `issuesv1`), usado solo en `handler/`, `mapper/` y `cli/main.go`.
 
-1. `go get <módulo-de-protos>@<versión>` (ej. `github.com/vrojas1015/tequio-protos@v0.1.0`).
-2. Handler nuevo que implemente `<paquete>.<X>ServiceServer`, mapper y registro en `cli/main.go`.
-3. Borrar el ejemplo (abajo), `buf.yaml`, `buf.gen.yaml`, `proto/` y `gen/`.
-4. Módulo privado: `GOPRIVATE`, token en CI y `make workspace`
-   (`copier update` con `protos_module` los genera; ver `docs/ci-cd-setup.md`).
-
-Repo de protos hecho con la plantilla `protos`: su ejemplo es este mismo
-`ItemService`, en `<módulo-de-protos>/gen/go/<paquete>/v1`. Para pasarse basta
-cambiar el import `github.com/vrojas1015/tequio-issues/gen/go/example/v1` por ese (handler, su
-test, mapper y `cli/main.go`) y borrar `proto/`, `gen/` y `buf.*`: los dos no
-pueden convivir (protobuf-go entra en pánico al registrar dos veces
-`example/v1/item.proto`). Sin tag publicado todavía:
-`go mod edit -require=<módulo>@v0.0.0 -replace=<módulo>=../<repo-protos>` y
-`go mod tidy` (sacar el `replace` al publicar la primera versión).
-
-## Borrar el ejemplo (entidad `Item`)
-
-`app/domain/model/item.go`, `app/domain/port/item_repository.go`,
-`app/application/item_service*.go` (+ mocks en `mocks_test.go`),
-`app/infra/postgres/item_repo.go`, `app/adapters/grpc/{handler,mapper}/item_*`,
-el wiring en `cli/main.go` y la tabla `items` en `migrations/000001_*`.
-`go build ./... && go test ./...` tiene que quedar verde.
+- Versión nueva del contrato: `go get github.com/vrojas1015/tequio-protos@vX.Y.Z`
+  + `go mod tidy`; implementar los RPCs nuevos en `IssueHandler` (el embed de
+  `Unimplemented…` los deja en `UNIMPLEMENTED` mientras tanto).
+- Co-desarrollo con un checkout local de los protos: `make workspace`
+  (`go.work`, fuera del repo) / `make workspace-off`.
 
 ## Reglas duras
 

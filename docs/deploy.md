@@ -204,7 +204,7 @@ aws s3 cp "s3://<bucket>/issues-service/prod/<STAMP>.dump" ./restore-test.dump
 docker run -d --name restore-test -e POSTGRES_PASSWORD=test -p 55432:5432 postgres:16
 sleep 5
 docker exec -i restore-test pg_restore -U postgres -d postgres --no-owner --no-privileges --exit-on-error < restore-test.dump
-docker exec restore-test psql -U postgres -c "SELECT count(*) FROM issues.items"   # tablas reales del servicio
+docker exec restore-test psql -U postgres -c "SELECT count(*) FROM issues.issues"
 # Opcional: levantar la imagen del servicio contra esta base y pegarle con grpcurl.
 docker rm -f restore-test && rm restore-test.dump
 ```
