@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS issues.items;
+DROP SCHEMA IF EXISTS issues;

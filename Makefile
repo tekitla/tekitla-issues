@@ -1,0 +1,83 @@
+# Makefile de issues-service
+.DEFAULT_GOAL := help
+
+# Checkout local del repo de protos (para `make workspace`).
+PROTOS_DIR ?= ../tequio-protos
+
+BIN := bin/issues-service
+
+.PHONY: help run build test test-race vet fmt lint tidy vendor proto up down logs clean workspace workspace-off
+
+## help: lista los targets
+help:
+	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/^## /  /'
+
+## run: corre el servicio local (lee .env.dev)
+run:
+	go run ./cli
+
+## build: compila el binario en bin/
+build:
+	go build -o $(BIN) ./cli
+
+## test: corre todos los tests
+test:
+	go test ./... -count=1
+
+## test-race: tests con el race detector (requiere cgo)
+test-race:
+	go test ./... -count=1 -race
+
+## vet: go vet
+vet:
+	go vet ./...
+
+## fmt: formatea el código
+fmt:
+	gofmt -w app cli
+
+## lint: gofmt (check) + go vet + golangci-lint si está instalado
+lint: vet
+	@out="$$(gofmt -l app cli)"; if [ -n "$$out" ]; then echo "gofmt pendiente en:"; echo "$$out"; exit 1; fi
+	@if command -v golangci-lint >/dev/null 2>&1; then golangci-lint run ./...; else echo "golangci-lint no instalado: solo gofmt + vet"; fi
+
+## tidy: go mod tidy
+tidy:
+	go mod tidy
+
+## vendor: genera vendor/ (solo para un docker build local; CI lo genera solo)
+vendor:
+	go mod vendor
+
+## proto: regenera gen/go desde proto/ (buf; plugins vía `go run`)
+proto:
+	buf generate
+
+## up: levanta Postgres + el servicio con docker compose (genera vendor/ antes)
+up: vendor
+	docker compose up -d --build --wait
+
+## down: baja docker compose (conserva el volumen; `docker compose down -v` lo borra)
+down:
+	docker compose down
+
+## logs: sigue los logs del servicio en docker compose
+logs:
+	docker compose logs -f app
+
+## clean: borra binarios y vendor/
+clean:
+	rm -rf bin vendor
+
+## workspace: apunta github.com/vrojas1015/tequio-protos al checkout local para co-desarrollar protos.
+## go.work está en .gitignore: es una preferencia de cada dev, no del repo.
+## Sin él, Go resuelve el módulo publicado con el hash de go.sum (lo mismo que CI).
+workspace:
+	@test -d $(PROTOS_DIR) || { echo "No existe $(PROTOS_DIR). Clonalo al lado de este repo o pasá PROTOS_DIR=..."; exit 1; }
+	go work init . $(PROTOS_DIR)
+	@echo "go.work creado. 'make workspace-off' para volver al módulo publicado."
+
+## workspace-off: descarta el workspace local
+workspace-off:
+	@rm -f go.work go.work.sum
+	@echo "go.work eliminado. github.com/vrojas1015/tequio-protos se resuelve desde el remoto."
