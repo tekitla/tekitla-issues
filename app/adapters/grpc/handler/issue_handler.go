@@ -38,7 +38,10 @@ func (h *IssueHandler) ListProjects(ctx context.Context, req *issuesv1.ListProje
 	if err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)
 	}
-	page, err := h.projectSvc.ListProjects(ctx, uid, mapper.PageFilterFromProto(req.GetPage()))
+	page, err := h.projectSvc.ListProjects(ctx, uid, application.ListProjectsInput{
+		WorkspaceID: req.GetWorkspaceId(),
+		Page:        mapper.PageFilterFromProto(req.GetPage()),
+	})
 	if err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)
 	}
@@ -54,6 +57,7 @@ func (h *IssueHandler) CreateProject(ctx context.Context, req *issuesv1.CreatePr
 		return nil, domainerrors.MapToGRPC(err, h.logger)
 	}
 	project, err := h.projectSvc.CreateProject(ctx, uid, application.CreateProjectInput{
+		WorkspaceID: req.GetWorkspaceId(),
 		Key:         req.GetKey(),
 		Name:        req.GetName(),
 		Description: req.GetDescription(),

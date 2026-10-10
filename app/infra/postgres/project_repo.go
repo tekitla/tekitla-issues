@@ -18,7 +18,7 @@ import (
 // IssueRepository.Create.
 type projectRow struct {
 	ID              string    `gorm:"primaryKey;column:id;type:uuid"`
-	OwnerUID        string    `gorm:"column:owner_uid;not null"`
+	WorkspaceID     string    `gorm:"column:workspace_id;type:uuid;not null"`
 	Key             string    `gorm:"column:key;not null"`
 	Name            string    `gorm:"column:name;not null"`
 	Description     string    `gorm:"column:description;not null"`
@@ -39,8 +39,8 @@ func NewProjectRepository(db *gorm.DB) *ProjectRepository {
 	return &ProjectRepository{db: db}
 }
 
-// Create inserta el proyecto con next_issue_number = 1. Key duplicada para el
-// mismo dueño -> ConflictError (constraint projects_owner_uid_key_key).
+// Create inserta el proyecto con next_issue_number = 1. Key duplicada en el
+// mismo espacio -> ConflictError (constraint projects_workspace_id_key_key).
 func (r *ProjectRepository) Create(ctx context.Context, p *model.Project) (*model.Project, error) {
 	row := toProjectRow(p)
 	row.NextIssueNumber = 1
@@ -52,10 +52,13 @@ func (r *ProjectRepository) Create(ctx context.Context, p *model.Project) (*mode
 	return fromProjectRow(row), nil
 }
 
-// GetByID busca el proyecto por PK, solo si es de ownerUID.
-func (r *ProjectRepository) GetByID(ctx context.Context, ownerUID, id string) (*model.Project, error) {
+// GetByID busca el proyecto por PK, solo si es de uno de workspaceIDs.
+func (r *ProjectRepository) GetByID(ctx context.Context, workspaceIDs []string, id string) (*model.Project, error) {
+	if len(workspaceIDs) == 0 {
+		return nil, domainerrors.NotFoundError("project not found", map[string]any{"id": id})
+	}
 	var row projectRow
-	err := r.db.WithContext(ctx).Where("id = ? AND owner_uid = ?", id, ownerUID).First(&row).Error
+	err := r.db.WithContext(ctx).Where("id = ? AND workspace_id IN ?", id, workspaceIDs).First(&row).Error
 	if err != nil {
 		return nil, translateError(err, "project", "get", map[string]any{"id": id})
 	}
@@ -64,10 +67,10 @@ func (r *ProjectRepository) GetByID(ctx context.Context, ownerUID, id string) (*
 
 // List pagina por keyset (name ASC, id ASC): pide limit+1 filas para saber si
 // hay página siguiente sin un COUNT.
-func (r *ProjectRepository) List(ctx context.Context, ownerUID string, filter port.PageFilter) (*port.ProjectPage, error) {
+func (r *ProjectRepository) List(ctx context.Context, workspaceIDs []string, filter port.PageFilter) (*port.ProjectPage, error) {
 	limit := int(filter.Limit)
 
-	query := r.db.WithContext(ctx).Model(&projectRow{}).Where("owner_uid = ?", ownerUID)
+	query := r.db.WithContext(ctx).Model(&projectRow{}).Where("workspace_id IN ?", workspaceIDs)
 	if filter.Cursor != "" {
 		c, err := decodeProjectCursor(filter.Cursor)
 		if err != nil {
@@ -75,6 +78,9 @@ func (r *ProjectRepository) List(ctx context.Context, ownerUID string, filter po
 		}
 		// Orden ASC => el keyset usa "mayor que".
 		query = query.Where("(name, id) > (?, ?)", c.Name, c.ID)
+	}
+	if len(workspaceIDs) == 0 {
+		return &port.ProjectPage{Projects: []*model.Project{}}, nil
 	}
 
 	var rows []projectRow
@@ -105,7 +111,7 @@ func dbNow() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }
 func toProjectRow(m *model.Project) *projectRow {
 	return &projectRow{
 		ID:          m.ID,
-		OwnerUID:    m.OwnerUID,
+		WorkspaceID: m.WorkspaceID,
 		Key:         m.Key,
 		Name:        m.Name,
 		Description: m.Description,
@@ -117,7 +123,7 @@ func toProjectRow(m *model.Project) *projectRow {
 func fromProjectRow(r *projectRow) *model.Project {
 	return &model.Project{
 		ID:          r.ID,
-		OwnerUID:    r.OwnerUID,
+		WorkspaceID: r.WorkspaceID,
 		Key:         r.Key,
 		Name:        r.Name,
 		Description: r.Description,

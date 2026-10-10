@@ -17,7 +17,7 @@ func TestTranslateError(t *testing.T) {
 	if err := translateError(gorm.ErrRecordNotFound, "project", "get", nil); !domainerrors.IsNotFound(err) {
 		t.Errorf("record not found: got %v", err)
 	}
-	unique := &pgconn.PgError{Code: "23505", ConstraintName: "projects_owner_uid_key_key"}
+	unique := &pgconn.PgError{Code: "23505", ConstraintName: "projects_workspace_id_key_key"}
 	if err := translateError(unique, "project", "create", nil); !domainerrors.IsConflict(err) {
 		t.Errorf("unique violation: got %v", err)
 	}

@@ -22,8 +22,9 @@ type ProjectPage struct {
 
 // ProjectRepository define la persistencia de Project.
 //
-// Todas las operaciones se acotan a un dueño (ownerUID): un proyecto de otro
-// dueño se comporta exactamente igual que uno que no existe (NotFound).
+// Las lecturas se acotan a los espacios de trabajo del usuario (workspaceIDs,
+// que resuelve el service): un proyecto de otro espacio se comporta
+// exactamente igual que uno que no existe (NotFound).
 //
 // Contrato de errores (todas las implementaciones):
 //   - no existe / es ajeno -> domainerrors.NotFoundError
@@ -31,11 +32,13 @@ type ProjectPage struct {
 //   - cursor inválido      -> domainerrors.ValidationError
 //   - cualquier otra cosa  -> domainerrors.InternalError
 type ProjectRepository interface {
-	// Create inserta el proyecto (ID, OwnerUID y Key ya seteados).
+	// Create inserta el proyecto (ID, WorkspaceID y Key ya seteados).
 	Create(ctx context.Context, project *model.Project) (*model.Project, error)
-	// GetByID devuelve el proyecto si pertenece a ownerUID.
-	GetByID(ctx context.Context, ownerUID, id string) (*model.Project, error)
-	// List pagina los proyectos de ownerUID ordenados por nombre (y por id
-	// como desempate estable).
-	List(ctx context.Context, ownerUID string, filter PageFilter) (*ProjectPage, error)
+	// GetByID devuelve el proyecto si pertenece a uno de workspaceIDs
+	// (workspaceIDs vacío -> NotFound).
+	GetByID(ctx context.Context, workspaceIDs []string, id string) (*model.Project, error)
+	// List pagina los proyectos de workspaceIDs ordenados por nombre (y por id
+	// como desempate estable). workspaceIDs vacío -> página vacía, pero el
+	// cursor se valida igual.
+	List(ctx context.Context, workspaceIDs []string, filter PageFilter) (*ProjectPage, error)
 }

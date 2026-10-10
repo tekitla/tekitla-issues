@@ -12,11 +12,33 @@ import (
 // Patrón: struct con campos func opcionales. Si un campo no está seteado, el
 // método devuelve zero values. Nada de testify/gomock/mockery: solo stdlib.
 
+// mockWorkspaceRepo satisface port.WorkspaceRepository.
+type mockWorkspaceRepo struct {
+	getPersonalFn    func(ctx context.Context, ownerUID string) (*model.Workspace, error)
+	ensurePersonalFn func(ctx context.Context, ws *model.Workspace) (*model.Workspace, error)
+}
+
+var _ port.WorkspaceRepository = (*mockWorkspaceRepo)(nil)
+
+func (m *mockWorkspaceRepo) GetPersonal(ctx context.Context, ownerUID string) (*model.Workspace, error) {
+	if m.getPersonalFn == nil {
+		return nil, nil
+	}
+	return m.getPersonalFn(ctx, ownerUID)
+}
+
+func (m *mockWorkspaceRepo) EnsurePersonal(ctx context.Context, ws *model.Workspace) (*model.Workspace, error) {
+	if m.ensurePersonalFn == nil {
+		return nil, nil
+	}
+	return m.ensurePersonalFn(ctx, ws)
+}
+
 // mockProjectRepo satisface port.ProjectRepository.
 type mockProjectRepo struct {
 	createFn  func(ctx context.Context, p *model.Project) (*model.Project, error)
-	getByIDFn func(ctx context.Context, ownerUID, id string) (*model.Project, error)
-	listFn    func(ctx context.Context, ownerUID string, f port.PageFilter) (*port.ProjectPage, error)
+	getByIDFn func(ctx context.Context, workspaceIDs []string, id string) (*model.Project, error)
+	listFn    func(ctx context.Context, workspaceIDs []string, f port.PageFilter) (*port.ProjectPage, error)
 }
 
 var _ port.ProjectRepository = (*mockProjectRepo)(nil)
@@ -28,23 +50,23 @@ func (m *mockProjectRepo) Create(ctx context.Context, p *model.Project) (*model.
 	return m.createFn(ctx, p)
 }
 
-func (m *mockProjectRepo) GetByID(ctx context.Context, ownerUID, id string) (*model.Project, error) {
+func (m *mockProjectRepo) GetByID(ctx context.Context, workspaceIDs []string, id string) (*model.Project, error) {
 	if m.getByIDFn == nil {
 		return nil, nil
 	}
-	return m.getByIDFn(ctx, ownerUID, id)
+	return m.getByIDFn(ctx, workspaceIDs, id)
 }
 
-func (m *mockProjectRepo) List(ctx context.Context, ownerUID string, f port.PageFilter) (*port.ProjectPage, error) {
+func (m *mockProjectRepo) List(ctx context.Context, workspaceIDs []string, f port.PageFilter) (*port.ProjectPage, error) {
 	if m.listFn == nil {
 		return nil, nil
 	}
-	return m.listFn(ctx, ownerUID, f)
+	return m.listFn(ctx, workspaceIDs, f)
 }
 
 // mockIssueRepo satisface port.IssueRepository.
 type mockIssueRepo struct {
-	createFn      func(ctx context.Context, ownerUID string, issue *model.Issue) (*model.Issue, error)
+	createFn      func(ctx context.Context, workspaceIDs []string, issue *model.Issue) (*model.Issue, error)
 	getByNumberFn func(ctx context.Context, projectID string, number int32) (*model.Issue, error)
 	listFn        func(ctx context.Context, f port.IssueFilter) (*port.IssuePage, error)
 	updateStateFn func(ctx context.Context, projectID string, number int32, state model.IssueState) (*model.Issue, error)
@@ -52,11 +74,11 @@ type mockIssueRepo struct {
 
 var _ port.IssueRepository = (*mockIssueRepo)(nil)
 
-func (m *mockIssueRepo) Create(ctx context.Context, ownerUID string, issue *model.Issue) (*model.Issue, error) {
+func (m *mockIssueRepo) Create(ctx context.Context, workspaceIDs []string, issue *model.Issue) (*model.Issue, error) {
 	if m.createFn == nil {
 		return nil, nil
 	}
-	return m.createFn(ctx, ownerUID, issue)
+	return m.createFn(ctx, workspaceIDs, issue)
 }
 
 func (m *mockIssueRepo) GetByNumber(ctx context.Context, projectID string, number int32) (*model.Issue, error) {

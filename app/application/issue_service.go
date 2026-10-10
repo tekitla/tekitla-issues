@@ -12,17 +12,18 @@ import (
 
 // IssueService implementa los casos de uso de Issue.
 //
-// Todo caso de uso verifica primero que el proyecto sea de ownerUID: un
-// proyecto ajeno responde NotFound, igual que uno inexistente, para no revelar
-// que existe.
+// Todo caso de uso verifica primero que el proyecto sea de un espacio de
+// ownerUID: un proyecto ajeno responde NotFound, igual que uno inexistente,
+// para no revelar que existe.
 type IssueService struct {
-	projects port.ProjectRepository
-	issues   port.IssueRepository
+	workspaces workspaces
+	projects   port.ProjectRepository
+	issues     port.IssueRepository
 }
 
 // NewIssueService construye el servicio.
-func NewIssueService(projects port.ProjectRepository, issues port.IssueRepository) *IssueService {
-	return &IssueService{projects: projects, issues: issues}
+func NewIssueService(workspaceRepo port.WorkspaceRepository, projects port.ProjectRepository, issues port.IssueRepository) *IssueService {
+	return &IssueService{workspaces: workspaces{repo: workspaceRepo}, projects: projects, issues: issues}
 }
 
 // ListIssuesInput son los datos que acepta ListIssues. State vacío = todos.
@@ -49,10 +50,10 @@ type MoveIssueInput struct {
 	State     model.IssueState
 }
 
-// ListIssues devuelve una página de issues del proyecto: prioridad
-// descendente y, dentro de la misma, el más reciente primero.
+// ListIssues devuelve una página de issues del proyecto en su orden manual
+// (rank ascendente).
 func (s *IssueService) ListIssues(ctx context.Context, ownerUID string, in ListIssuesInput) (*port.IssuePage, error) {
-	if err := s.ensureProject(ctx, ownerUID, in.ProjectID); err != nil {
+	if _, err := s.ensureProject(ctx, ownerUID, in.ProjectID); err != nil {
 		return nil, err
 	}
 	if in.State != model.IssueStateUnspecified && !in.State.IsValid() {
@@ -68,7 +69,7 @@ func (s *IssueService) ListIssues(ctx context.Context, ownerUID string, in ListI
 
 // GetIssue devuelve un issue por su número dentro del proyecto.
 func (s *IssueService) GetIssue(ctx context.Context, ownerUID, projectID string, number int32) (*model.Issue, error) {
-	if err := s.ensureProject(ctx, ownerUID, projectID); err != nil {
+	if _, err := s.ensureProject(ctx, ownerUID, projectID); err != nil {
 		return nil, err
 	}
 	if err := validateIssueNumber(number); err != nil {
@@ -77,9 +78,11 @@ func (s *IssueService) GetIssue(ctx context.Context, ownerUID, projectID string,
 	return s.issues.GetByNumber(ctx, projectID, number)
 }
 
-// CreateIssue crea un issue en estado Todo con el siguiente número del proyecto.
+// CreateIssue crea un issue en estado Todo con el siguiente número del
+// proyecto, al final de su orden.
 func (s *IssueService) CreateIssue(ctx context.Context, ownerUID string, in CreateIssueInput) (*model.Issue, error) {
-	if err := s.ensureProject(ctx, ownerUID, in.ProjectID); err != nil {
+	workspaceIDs, err := s.ensureProject(ctx, ownerUID, in.ProjectID)
+	if err != nil {
 		return nil, err
 	}
 	title, err := model.NormalizeIssueTitle(in.Title)
@@ -106,12 +109,12 @@ func (s *IssueService) CreateIssue(ctx context.Context, ownerUID string, in Crea
 		State:       model.IssueStateTodo,
 		Priority:    priority,
 	}
-	return s.issues.Create(ctx, ownerUID, issue)
+	return s.issues.Create(ctx, workspaceIDs, issue)
 }
 
 // MoveIssue cambia el estado de un issue. Estado vacío o desconocido -> ValidationError.
 func (s *IssueService) MoveIssue(ctx context.Context, ownerUID string, in MoveIssueInput) (*model.Issue, error) {
-	if err := s.ensureProject(ctx, ownerUID, in.ProjectID); err != nil {
+	if _, err := s.ensureProject(ctx, ownerUID, in.ProjectID); err != nil {
 		return nil, err
 	}
 	if err := validateIssueNumber(in.Number); err != nil {
@@ -123,17 +126,24 @@ func (s *IssueService) MoveIssue(ctx context.Context, ownerUID string, in MoveIs
 	return s.issues.UpdateState(ctx, in.ProjectID, in.Number, in.State)
 }
 
-// ensureProject valida el dueño y el project_id y verifica que el proyecto
-// sea de ownerUID (NotFound si no existe o es ajeno).
-func (s *IssueService) ensureProject(ctx context.Context, ownerUID, projectID string) error {
+// ensureProject valida el usuario y el project_id y verifica que el proyecto
+// sea de uno de sus espacios (NotFound si no existe o es ajeno). Devuelve los
+// espacios del usuario.
+func (s *IssueService) ensureProject(ctx context.Context, ownerUID, projectID string) ([]string, error) {
 	if err := requireOwner(ownerUID); err != nil {
-		return err
+		return nil, err
 	}
 	if err := validateUUID("project_id", projectID); err != nil {
-		return err
+		return nil, err
 	}
-	_, err := s.projects.GetByID(ctx, ownerUID, projectID)
-	return err
+	workspaceIDs, err := s.workspaces.ids(ctx, ownerUID)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.projects.GetByID(ctx, workspaceIDs, projectID); err != nil {
+		return nil, err
+	}
+	return workspaceIDs, nil
 }
 
 func invalidState(state model.IssueState) error {

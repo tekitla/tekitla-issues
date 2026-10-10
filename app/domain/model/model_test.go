@@ -86,7 +86,7 @@ func TestNormalizeDescriptions(t *testing.T) {
 }
 
 func TestIssueState_IsValid(t *testing.T) {
-	for _, s := range []model.IssueState{model.IssueStateTodo, model.IssueStateInProgress, model.IssueStateDone} {
+	for _, s := range []model.IssueState{model.IssueStateTodo, model.IssueStateInProgress, model.IssueStateDone, model.IssueStateCanceled} {
 		if !s.IsValid() {
 			t.Errorf("%q should be valid", s)
 		}

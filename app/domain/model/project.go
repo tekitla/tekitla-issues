@@ -16,15 +16,15 @@ const (
 	ProjectDescriptionMaxLen = 2000
 )
 
-// Project agrupa issues. Pertenece a un único dueño (OwnerUID, el uid que
-// propaga el gateway); en la rebanada 1 no hay organizaciones ni miembros.
+// Project agrupa issues. Pertenece a un espacio de trabajo (WorkspaceID); en
+// la rebanada 1, siempre el espacio personal de quien lo crea.
 //
 // Regla: el dominio es Go puro. Sin tags de GORM, sin tipos de proto.
 type Project struct {
-	ID       string
-	OwnerUID string
+	ID          string
+	WorkspaceID string
 	// Key es la clave corta del proyecto ("TK"); los issues se nombran TK-42.
-	// Única por dueño.
+	// Única por espacio de trabajo.
 	Key         string
 	Name        string
 	Description string

@@ -23,9 +23,9 @@ type IssuePage struct {
 
 // IssueRepository define la persistencia de Issue.
 //
-// La pertenencia del proyecto al usuario la verifica el service (con
-// ProjectRepository.GetByID) antes de llamar a estos métodos; Create la
-// vuelve a exigir porque reserva el número sobre la fila del proyecto.
+// La pertenencia del proyecto a los espacios del usuario la verifica el
+// service (con ProjectRepository.GetByID) antes de llamar a estos métodos;
+// Create la vuelve a exigir porque reserva el número sobre la fila del proyecto.
 //
 // Contrato de errores (todas las implementaciones):
 //   - no existe           -> domainerrors.NotFoundError
@@ -33,14 +33,15 @@ type IssuePage struct {
 //   - cursor inválido     -> domainerrors.ValidationError
 //   - cualquier otra cosa -> domainerrors.InternalError
 type IssueRepository interface {
-	// Create asigna el siguiente número del proyecto (seguro con concurrencia)
-	// e inserta el issue en la misma transacción. Si el proyecto no existe o
-	// no es de ownerUID devuelve NotFound. Devuelve el issue con Number y
-	// timestamps seteados.
-	Create(ctx context.Context, ownerUID string, issue *model.Issue) (*model.Issue, error)
+	// Create asigna el siguiente número del proyecto y un rank al final del
+	// orden (seguro con concurrencia) e inserta el issue en la misma
+	// transacción. Si el proyecto no existe o no es de uno de workspaceIDs
+	// devuelve NotFound. Devuelve el issue con Number, Rank y timestamps
+	// seteados.
+	Create(ctx context.Context, workspaceIDs []string, issue *model.Issue) (*model.Issue, error)
 	// GetByNumber busca un issue por su número dentro del proyecto.
 	GetByNumber(ctx context.Context, projectID string, number int32) (*model.Issue, error)
-	// List pagina los issues del proyecto: prioridad DESC, created_at DESC, id DESC.
+	// List pagina los issues del proyecto por rank ASC (id ASC como desempate).
 	List(ctx context.Context, filter IssueFilter) (*IssuePage, error)
 	// UpdateState cambia el estado y devuelve el issue actualizado.
 	UpdateState(ctx context.Context, projectID string, number int32, state model.IssueState) (*model.Issue, error)
