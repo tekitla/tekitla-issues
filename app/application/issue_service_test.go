@@ -139,7 +139,7 @@ func asDomainError(err error, target **domainerrors.DomainError) bool {
 // ================================================================
 
 func TestIssueService_ForeignProjectIsNotFound(t *testing.T) {
-	svc := application.NewIssueService(personalWorkspaces(), ownedProjects(), failIssueRepo(t))
+	svc := newIssueSvc(personalWorkspaces(), ownedProjects(), failIssueRepo(t))
 	ctx := context.Background()
 
 	if _, err := svc.ListIssues(ctx, otherOwner, application.ListIssuesInput{ProjectID: validID}); !domainerrors.IsNotFound(err) {
@@ -157,14 +157,14 @@ func TestIssueService_ForeignProjectIsNotFound(t *testing.T) {
 }
 
 func TestIssueService_RequiresOwner(t *testing.T) {
-	svc := application.NewIssueService(personalWorkspaces(), ownedProjects(), failIssueRepo(t))
+	svc := newIssueSvc(personalWorkspaces(), ownedProjects(), failIssueRepo(t))
 	if _, err := svc.GetIssue(context.Background(), "", validID, 1); !isUnauthenticated(err) {
 		t.Errorf("expected UnauthorizedError, got %v", err)
 	}
 }
 
 func TestIssueService_InvalidProjectID(t *testing.T) {
-	svc := application.NewIssueService(personalWorkspaces(), ownedProjects(), failIssueRepo(t))
+	svc := newIssueSvc(personalWorkspaces(), ownedProjects(), failIssueRepo(t))
 	for _, id := range []string{"", "not-a-uuid"} {
 		if _, err := svc.ListIssues(context.Background(), owner, application.ListIssuesInput{ProjectID: id}); !domainerrors.IsValidation(err) {
 			t.Errorf("project_id %q: expected ValidationError, got %v", id, err)
@@ -213,7 +213,9 @@ func TestCreateIssue_DefaultsPriorityAndState(t *testing.T) {
 
 func TestCreateIssue_KeepsExplicitPriority(t *testing.T) {
 	issues := &mockIssueRepo{
-		createFn: func(_ context.Context, _ []string, issue *model.Issue, _ string) (*model.Issue, error) { return issue, nil },
+		createFn: func(_ context.Context, _ []string, issue *model.Issue, _ string) (*model.Issue, error) {
+			return issue, nil
+		},
 	}
 	got, err := newIssueSvc(personalWorkspaces(), ownedProjects(), issues).CreateIssue(context.Background(), owner, application.CreateIssueInput{
 		ProjectID: validID, Title: "x", Priority: model.PriorityUrgent,
@@ -227,7 +229,7 @@ func TestCreateIssue_KeepsExplicitPriority(t *testing.T) {
 }
 
 func TestCreateIssue_Validation(t *testing.T) {
-	svc := application.NewIssueService(personalWorkspaces(), ownedProjects(), failIssueRepo(t))
+	svc := newIssueSvc(personalWorkspaces(), ownedProjects(), failIssueRepo(t))
 	for name, in := range map[string]application.CreateIssueInput{
 		"empty title":      {ProjectID: validID, Title: "  "},
 		"unknown priority": {ProjectID: validID, Title: "x", Priority: model.Priority(9)},
@@ -278,7 +280,7 @@ func TestMoveIssue_Success(t *testing.T) {
 }
 
 func TestMoveIssue_InvalidState(t *testing.T) {
-	svc := application.NewIssueService(personalWorkspaces(), ownedProjects(), failIssueRepo(t))
+	svc := newIssueSvc(personalWorkspaces(), ownedProjects(), failIssueRepo(t))
 	for _, st := range []model.IssueState{model.IssueStateUnspecified, "blocked"} {
 		_, err := svc.MoveIssue(context.Background(), owner, application.MoveIssueInput{ProjectID: validID, Number: 1, State: st})
 		if !domainerrors.IsValidation(err) {
@@ -288,7 +290,7 @@ func TestMoveIssue_InvalidState(t *testing.T) {
 }
 
 func TestMoveIssue_InvalidNumber(t *testing.T) {
-	svc := application.NewIssueService(personalWorkspaces(), ownedProjects(), failIssueRepo(t))
+	svc := newIssueSvc(personalWorkspaces(), ownedProjects(), failIssueRepo(t))
 	_, err := svc.MoveIssue(context.Background(), owner, application.MoveIssueInput{ProjectID: validID, Number: 0, State: model.IssueStateDone})
 	if !domainerrors.IsValidation(err) {
 		t.Fatalf("expected ValidationError, got %v", err)
@@ -329,7 +331,7 @@ func TestGetIssue_Success(t *testing.T) {
 }
 
 func TestGetIssue_InvalidNumber(t *testing.T) {
-	svc := application.NewIssueService(personalWorkspaces(), ownedProjects(), failIssueRepo(t))
+	svc := newIssueSvc(personalWorkspaces(), ownedProjects(), failIssueRepo(t))
 	if _, err := svc.GetIssue(context.Background(), owner, validID, -1); !domainerrors.IsValidation(err) {
 		t.Fatalf("expected ValidationError, got %v", err)
 	}
@@ -359,7 +361,7 @@ func TestListIssues_PassesFilter(t *testing.T) {
 }
 
 func TestListIssues_InvalidStateFilter(t *testing.T) {
-	svc := application.NewIssueService(personalWorkspaces(), ownedProjects(), failIssueRepo(t))
+	svc := newIssueSvc(personalWorkspaces(), ownedProjects(), failIssueRepo(t))
 	_, err := svc.ListIssues(context.Background(), owner, application.ListIssuesInput{ProjectID: validID, State: "blocked"})
 	if !domainerrors.IsValidation(err) {
 		t.Fatalf("expected ValidationError, got %v", err)
@@ -394,7 +396,7 @@ func TestIssueService_PropagatesWorkspaceError(t *testing.T) {
 // Un usuario sin espacio (nunca creó un proyecto) no ve proyectos ajenos y la
 // lectura no crea el espacio.
 func TestIssueService_UserWithoutWorkspaceIsNotFound(t *testing.T) {
-	svc := application.NewIssueService(noWorkspaces(t), ownedProjects(), failIssueRepo(t))
+	svc := newIssueSvc(noWorkspaces(t), ownedProjects(), failIssueRepo(t))
 	if _, err := svc.GetIssue(context.Background(), owner, validID, 1); !domainerrors.IsNotFound(err) {
 		t.Fatalf("expected NotFound, got %v", err)
 	}
