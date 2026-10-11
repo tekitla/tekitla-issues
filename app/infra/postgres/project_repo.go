@@ -39,14 +39,35 @@ func NewProjectRepository(db *gorm.DB) *ProjectRepository {
 	return &ProjectRepository{db: db}
 }
 
-// Create inserta el proyecto con next_issue_number = 1. Key duplicada en el
-// mismo espacio -> ConflictError (constraint projects_workspace_id_key_key).
-func (r *ProjectRepository) Create(ctx context.Context, p *model.Project) (*model.Project, error) {
+// Create inserta el proyecto con next_issue_number = 1 y sus estados
+// iniciales en una transacción. Key duplicada en el mismo espacio ->
+// ConflictError (constraint projects_workspace_id_key_key).
+func (r *ProjectRepository) Create(ctx context.Context, p *model.Project, statuses []*model.Status) (*model.Project, error) {
 	row := toProjectRow(p)
 	row.NextIssueNumber = 1
 	now := dbNow()
 	row.CreatedAt, row.UpdatedAt = now, now
-	if err := r.db.WithContext(ctx).Create(row).Error; err != nil {
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(row).Error; err != nil {
+			return err
+		}
+		rank := ""
+		for _, st := range statuses {
+			next, err := model.RankAfter(rank)
+			if err != nil {
+				return err
+			}
+			rank = next
+			sr := toStatusRow(st)
+			sr.ProjectID, sr.Rank = p.ID, rank
+			sr.CreatedAt, sr.UpdatedAt = now, now
+			if err := tx.Create(sr).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
 		return nil, translateError(err, "project", "create", map[string]any{"key": p.Key})
 	}
 	return fromProjectRow(row), nil

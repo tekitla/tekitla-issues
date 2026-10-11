@@ -53,6 +53,8 @@ func IssueToProto(m *model.Issue) *issuesv1.Issue {
 		State:       IssueStateToProto(m.State),
 		Priority:    PriorityToProto(m.Priority),
 		Rank:        m.Rank,
+		StatusId:    m.StatusID,
+		LabelIds:    m.LabelIDs,
 		CreatedAt:   TimestampToProto(m.CreatedAt),
 		UpdatedAt:   TimestampToProto(m.UpdatedAt),
 	}

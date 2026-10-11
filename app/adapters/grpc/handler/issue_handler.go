@@ -10,6 +10,7 @@ import (
 	"github.com/tekitla/tekitla-issues/app/adapters/grpc/mapper"
 	"github.com/tekitla/tekitla-issues/app/application"
 	domainerrors "github.com/tekitla/tekitla-issues/app/domain/errors"
+	"github.com/tekitla/tekitla-issues/app/domain/port"
 )
 
 // IssueHandler implementa issuesv1.IssueServiceServer.
@@ -24,13 +25,21 @@ type IssueHandler struct {
 	logger     *zap.Logger
 	projectSvc *application.ProjectService
 	issueSvc   *application.IssueService
+	statusSvc  *application.StatusService
+	labelSvc   *application.LabelService
 }
 
 var _ issuesv1.IssueServiceServer = (*IssueHandler)(nil)
 
 // NewIssueHandler construye el handler.
-func NewIssueHandler(logger *zap.Logger, projectSvc *application.ProjectService, issueSvc *application.IssueService) *IssueHandler {
-	return &IssueHandler{logger: logger, projectSvc: projectSvc, issueSvc: issueSvc}
+func NewIssueHandler(
+	logger *zap.Logger,
+	projectSvc *application.ProjectService,
+	issueSvc *application.IssueService,
+	statusSvc *application.StatusService,
+	labelSvc *application.LabelService,
+) *IssueHandler {
+	return &IssueHandler{logger: logger, projectSvc: projectSvc, issueSvc: issueSvc, statusSvc: statusSvc, labelSvc: labelSvc}
 }
 
 func (h *IssueHandler) ListProjects(ctx context.Context, req *issuesv1.ListProjectsRequest) (*issuesv1.ListProjectsResponse, error) {
@@ -126,6 +135,8 @@ func (h *IssueHandler) MoveIssue(ctx context.Context, req *issuesv1.MoveIssueReq
 		ProjectID: req.GetProjectId(),
 		Number:    req.GetNumber(),
 		State:     mapper.IssueStateFromProto(req.GetState()),
+		StatusID:  req.GetStatusId(),
+		Place:     port.Placement{AfterNumber: req.GetAfterNumber(), BeforeNumber: req.GetBeforeNumber()},
 	})
 	if err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)
