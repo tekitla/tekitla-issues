@@ -4,11 +4,11 @@
 -- ============================================================
 -- Migración con backfill: los proyectos existentes reciben sus cuatro estados
 -- (uno por categoría, mismos nombres que crea el servicio) y cada issue el
--- estado de su categoría. Todo en una transacción.
+-- estado de su categoría. Sin BEGIN/COMMIT propios: scripts/apply_migration.sh
+-- envuelve el archivo en una transacción (y lo prueba en seco con ROLLBACK).
 -- PKs UUID: el servicio las genera; el backfill usa gen_random_uuid()
 -- (Postgres 13+).
 
-BEGIN;
 
 -- ------------------------------------------------------------
 -- statuses: columnas del tablero de cada proyecto
@@ -137,5 +137,3 @@ SELECT gen_random_uuid(), i.id, w.owner_uid, 'created', '{}'::jsonb, i.created_a
   JOIN issues.projects p ON p.id = i.project_id
   JOIN issues.workspaces w ON w.id = p.workspace_id
  ORDER BY i.created_at, i.number;
-
-COMMIT;

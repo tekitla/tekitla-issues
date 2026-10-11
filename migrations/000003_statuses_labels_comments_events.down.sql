@@ -1,6 +1,5 @@
 -- Revierte 000003. Pierde estados propios, etiquetas, comentarios e historial;
 -- issues.state (la categoría) queda como estaba.
-BEGIN;
 
 DROP TABLE IF EXISTS issues.issue_events;
 DROP TABLE IF EXISTS issues.comments;
@@ -13,4 +12,3 @@ ALTER TABLE issues.issues DROP COLUMN IF EXISTS status_id;
 
 DROP TABLE IF EXISTS issues.statuses;
 
-COMMIT;

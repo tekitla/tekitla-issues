@@ -258,6 +258,16 @@ func (r *IssueRepository) Move(ctx context.Context, projectID string, number int
 		if err != nil {
 			return err
 		}
+		// El service eligió el destino antes de la transacción: se relee con el
+		// lock del proyecto tomado (pudo borrarse o renombrarse).
+		targetRow, err := getStatusRow(tx, projectID, target.ID)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return statusGone(target.ID)
+		}
+		if err != nil {
+			return err
+		}
+		target = fromStatusRow(targetRow)
 		statusChanged := cur.StatusID != target.ID
 		if !statusChanged && place.IsZero() {
 			out = cur
@@ -329,6 +339,23 @@ func placeRank(tx *gorm.DB, projectID string, cur *model.Issue, statusID string,
 	}
 	if lo != "" && hi != "" && lo >= hi {
 		return "", stale("neighbors are out of order")
+	}
+	// Los vecinos tienen que ser contiguos en la columna, tal como la ve el
+	// cliente: un issue de la columna entre ellos (o más allá del lado sin
+	// vecino) quiere decir que la vista está vieja.
+	between := tx.Model(&issueRow{}).Where("project_id = ? AND status_id = ? AND id <> ?", projectID, statusID, cur.ID)
+	if lo != "" {
+		between = between.Where("rank > ?", lo)
+	}
+	if hi != "" {
+		between = between.Where("rank < ?", hi)
+	}
+	var inBetween int64
+	if err := between.Count(&inBetween).Error; err != nil {
+		return "", err
+	}
+	if inBetween > 0 {
+		return "", stale("neighbors are not adjacent in the target column")
 	}
 	// Ajusta el lado abierto a la clave contigua del proyecto (sin cur).
 	var keys []string
@@ -444,8 +471,13 @@ func (r *IssueRepository) AddComment(ctx context.Context, projectID string, numb
 	details := map[string]any{"project_id": projectID, "number": number}
 	now := dbNow()
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// FOR UPDATE: los eventos de un issue se escriben de a uno, así el seq
+		// de cada evento sigue el orden de commit y el cursor de ListEvents no
+		// salta ninguno.
 		var ids []string
-		if err := tx.Model(&issueRow{}).Where("project_id = ? AND number = ?", projectID, number).Pluck("id", &ids).Error; err != nil {
+		err := tx.Raw(`SELECT id FROM issues.issues WHERE project_id = ? AND number = ? FOR UPDATE`, projectID, number).
+			Scan(&ids).Error
+		if err != nil {
 			return err
 		}
 		if len(ids) == 0 {
@@ -514,6 +546,12 @@ func (r *IssueRepository) ListEvents(ctx context.Context, projectID string, numb
 		out.NextCursor = encodeCursor(eventCursor{Seq: rows[len(rows)-1].Seq})
 	}
 	return out, nil
+}
+
+// statusGone: el estado elegido se borró antes de escribir (otra request).
+func statusGone(id string) error {
+	return domainerrors.FailedPreconditionError("status no longer exists", map[string]any{"status_id": id}).
+		WithReason("STALE_ORDER")
 }
 
 // writeError: los DomainError (STALE_ORDER, NotFound del proyecto) pasan tal

@@ -197,6 +197,9 @@ git tag prod-v0.1.0 && git push origin prod-v0.1.0   # prod, automático salvo m
 
 - La imagen se publica con el tag inmutable (`qa-v0.1.0`) y uno móvil (`qa`/`prod`);
   el recurso de Coolify usa `IMAGE_TAG=qa|prod`.
+- `000003` no es compatible con el binario anterior (exige `status_id` y estados
+  por proyecto): se aplica y se despliega la imagen nueva en seguida, sin
+  tráfico de por medio. Hoy no aplica: nada está desplegado todavía.
 - Release con cambios en `migrations/`: la guarda de prod bloquea. Aplicar el
   SQL por túnel SSH (`scripts/apply_migration.sh prod <migración> --apply`) y
   lanzar el override.

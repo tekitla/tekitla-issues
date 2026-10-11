@@ -178,16 +178,8 @@ func (r *StatusRepository) Delete(ctx context.Context, projectID, id, moveToID, 
 				WithReason("LAST_STATUS_OF_CATEGORY")
 		}
 
-		var issues []issueRow
-		if err := tx.Where("project_id = ? AND status_id = ?", projectID, id).Order("rank ASC").Find(&issues).Error; err != nil {
-			return err
-		}
-		if len(issues) > 0 {
-			if moveToID == "" {
-				return domainerrors.FailedPreconditionError("status has issues: move_to_status_id is required", map[string]any{"issues": len(issues)}).
-					WithReason("STATUS_HAS_ISSUES")
-			}
-			var target *statusRow
+		var target *statusRow
+		if moveToID != "" {
 			for i := range rows {
 				if rows[i].ID == moveToID {
 					target = &rows[i]
@@ -196,17 +188,18 @@ func (r *StatusRepository) Delete(ctx context.Context, projectID, id, moveToID, 
 			if target == nil {
 				return domainerrors.ValidationError("move_to_status_id is not part of the project", map[string]any{"field": "move_to_status_id", "value": moveToID})
 			}
-			now := dbNow()
-			if err := tx.Model(&issueRow{}).Where("project_id = ? AND status_id = ?", projectID, id).
-				Updates(map[string]any{"status_id": target.ID, "state": target.Category, "updated_at": now}).Error; err != nil {
-				return err
+		}
+		var count int64
+		if err := tx.Model(&issueRow{}).Where("project_id = ? AND status_id = ?", projectID, id).Count(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			if target == nil {
+				return domainerrors.FailedPreconditionError("status has issues: move_to_status_id is required", map[string]any{"issues": count}).
+					WithReason("STATUS_HAS_ISSUES")
 			}
-			change := model.NewStatusChange(fromStatusRow(status), fromStatusRow(target))
-			for _, it := range issues {
-				ev := &model.IssueEvent{Kind: model.EventStatusChanged, Status: change}
-				if err := insertEvent(tx, it.ID, actorUID, ev, now); err != nil {
-					return err
-				}
+			if err := moveAllIssues(tx, projectID, status, target, actorUID); err != nil {
+				return err
 			}
 		}
 		return tx.Where("project_id = ? AND id = ?", projectID, id).Delete(&statusRow{}).Error
@@ -215,6 +208,30 @@ func (r *StatusRepository) Delete(ctx context.Context, projectID, id, moveToID, 
 		return statusError(err, "delete", map[string]any{"id": id})
 	}
 	return nil
+}
+
+// moveAllIssues pasa todos los issues de from a to y registra un evento por
+// issue, en dos sentencias (el lock del proyecto queda tomado poco tiempo).
+func moveAllIssues(tx *gorm.DB, projectID string, from, to *statusRow, actorUID string) error {
+	now := dbNow()
+	ev := &model.IssueEvent{Kind: model.EventStatusChanged, Status: model.NewStatusChange(fromStatusRow(from), fromStatusRow(to))}
+	data, err := eventData(ev)
+	if err != nil {
+		return err
+	}
+	err = tx.Exec(
+		`INSERT INTO issues.issue_events (id, issue_id, actor_uid, kind, data, created_at)
+		 SELECT gen_random_uuid(), id, ?, ?, ?::jsonb, ?
+		   FROM issues.issues
+		  WHERE project_id = ? AND status_id = ?
+		  ORDER BY rank`,
+		actorUID, string(model.EventStatusChanged), string(data), now, projectID, from.ID,
+	).Error
+	if err != nil {
+		return err
+	}
+	return tx.Model(&issueRow{}).Where("project_id = ? AND status_id = ?", projectID, from.ID).
+		Updates(map[string]any{"status_id": to.ID, "state": to.Category, "updated_at": now}).Error
 }
 
 // lockProject toma el lock de la fila del proyecto: serializa las escrituras

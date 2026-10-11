@@ -94,6 +94,14 @@ func (r *IssueRepository) Create(ctx context.Context, workspaceIDs []string, iss
 			return fmt.Errorf("rank after %q: %v", lastRank, err)
 		}
 
+		// El estado lo eligió el service antes de la transacción: con el lock
+		// del proyecto tomado, se verifica que siga existiendo.
+		if _, err := getStatusRow(tx, issue.ProjectID, issue.StatusID); errors.Is(err, gorm.ErrRecordNotFound) {
+			return statusGone(issue.StatusID)
+		} else if err != nil {
+			return err
+		}
+
 		row.Number = number
 		row.Rank = rank
 		if err := tx.Create(row).Error; err != nil {
@@ -105,7 +113,7 @@ func (r *IssueRepository) Create(ctx context.Context, workspaceIDs []string, iss
 		return nil, domainerrors.NotFoundError("project not found", map[string]any{"id": issue.ProjectID})
 	}
 	if err != nil {
-		return nil, translateError(err, "issue", "create", map[string]any{"project_id": issue.ProjectID})
+		return nil, writeError(err, "issue", "create", map[string]any{"project_id": issue.ProjectID})
 	}
 	out := fromIssueRow(row)
 	out.LabelIDs = []string{}
