@@ -81,10 +81,14 @@ Variables*. Las marcadas con `:?` son obligatorias (el deploy falla si faltan).
 | `PG_LOCAL_PORT` | `15432` | `15433` | Puerto de Postgres en `127.0.0.1` del VPS (distinto por recurso) |
 
 ```
-DATABASE_URL=postgres://issues_user:<POSTGRES_PASSWORD>@postgres:5432/issues?sslmode=disable
+DATABASE_URL=postgres://issues_user:<POSTGRES_PASSWORD>@postgres-<UUID-del-recurso>:5432/issues?sslmode=disable
 ```
 
-`postgres` es el nombre del servicio dentro del compose. `GRPC_PORT` y
+Con *Connect to Predefined Network* activado (lo necesita el gateway, ver §6),
+Coolify nombra cada contenedor `<servicio>-<UUID del recurso>` y todos los
+recursos conectados comparten la red: `postgres` a secas puede resolver al
+Postgres de otro recurso (QA y prod en el mismo VPS). Usá el nombre completo
+(confirmalo con `docker ps`). Sin la red predefinida alcanza con `postgres`. `GRPC_PORT` y
 `OTEL_SERVICE_NAME` están fijos en el compose (`5000` / `issues-service`).
 
 > `POSTGRES_PASSWORD` solo se usa al **crear** el volumen. Cambiarlo después
@@ -141,11 +145,12 @@ El servicio es **interno**: el compose no publica el puerto de la app al host
 (solo `expose`). Lo normal es que lo llame un gateway HTTP que corre en el
 mismo servidor y es lo único con dominio público.
 
-- **Gateway en otro recurso de Coolify**: cada recurso de Docker Compose tiene
-  su propia red. Para que el gateway resuelva este servicio hay que ponerlos en
-  una red compartida (Coolify tiene una opción para conectar el recurso a la
-  red predefinida; verificá el nombre en tu versión) y usar como host el
-  nombre del contenedor/servicio que muestra Coolify.
+- **Gateway en otro recurso de Coolify** (tekitla-gateway): cada recurso de
+  Docker Compose tiene su propia red. Activá *Connect to Predefined Network* en
+  los dos recursos; el gateway usa `UPSTREAM_ISSUES_ADDR=app-<UUID de este
+  recurso>:5000` (el nombre del contenedor; confirmalo con `docker ps`). Ojo
+  con `DATABASE_URL` (§3): con esa red, el host de Postgres también va con
+  el UUID.
 - **gRPC público detrás del proxy de Coolify (Traefik)**: gRPC necesita HTTP/2
   de punta a punta. Traefik termina TLS y por defecto habla con el backend por
   HTTP/1.1, lo que rompe gRPC. Hay que declarar el backend como **h2c**
