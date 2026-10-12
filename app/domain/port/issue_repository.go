@@ -6,12 +6,21 @@ import (
 	"github.com/tekitla/tekitla-issues/app/domain/model"
 )
 
-// IssueFilter parametriza ListIssues. State vacío = todos los estados.
+// IssueFilter parametriza ListIssues: los filtros se combinan con Y; dentro
+// de una lista, con O. Una lista vacía no filtra. Todo viene validado (los
+// estados y etiquetas son del proyecto, sin repetidos).
 type IssueFilter struct {
-	ProjectID string
-	State     model.IssueState
-	Cursor    string
-	Limit     int32
+	ProjectID  string
+	States     []model.IssueState
+	StatusIDs  []string
+	Priorities []model.Priority
+	// LabelIDs: pasa un issue con cualquiera de ellas.
+	LabelIDs []string
+	Search   model.IssueSearch
+	// Order nunca vacío (el service pone IssueOrderRank).
+	Order  model.IssueOrder
+	Cursor string
+	Limit  int32
 }
 
 // IssuePage es una página de issues con cursor keyset.
@@ -51,6 +60,8 @@ type EventPage struct {
 //   - unique violation       -> domainerrors.ConflictError
 //   - cursor inválido        -> domainerrors.ValidationError
 //   - vecinos de Move viejos -> domainerrors.FailedPreconditionError (reason STALE_ORDER)
+//   - cursor de otros filtros u otro orden -> domainerrors.ValidationError
+//   - descartar uno descartado o restaurar uno que no lo está -> FailedPreconditionError
 //   - cualquier otra cosa    -> domainerrors.InternalError
 type IssueRepository interface {
 	// Create asigna el siguiente número del proyecto y un rank al final del
@@ -61,16 +72,28 @@ type IssueRepository interface {
 	Create(ctx context.Context, workspaceIDs []string, issue *model.Issue, actorUID string) (*model.Issue, error)
 	// GetByNumber busca un issue por su número dentro del proyecto.
 	GetByNumber(ctx context.Context, projectID string, number int32) (*model.Issue, error)
-	// List pagina los issues del proyecto por rank ASC.
+	// List pagina los issues del proyecto con los filtros y el orden de filter
+	// (empates por rank ASC).
 	List(ctx context.Context, filter IssueFilter) (*IssuePage, error)
 	// Move pasa el issue al estado target (del mismo proyecto) y, si place no
 	// es cero, le calcula un rank entre sus vecinos. Registra el cambio de
 	// estado (reordenar no genera evento). Sin cambios, devuelve el issue tal
-	// cual.
+	// cual. Si el issue sale de CANCELED, borra su Discard.
 	Move(ctx context.Context, projectID string, number int32, target *model.Status, place Placement, actorUID string) (*model.Issue, error)
 	// Update aplica el patch (ya validado; las etiquetas son del proyecto) y
 	// registra un evento por cada campo que de verdad cambia.
 	Update(ctx context.Context, projectID string, number int32, patch model.IssuePatch, actorUID string) (*model.Issue, error)
+	// Discard pasa el issue al estado CANCELED statusID (ya validado; "" = el
+	// primero de esa categoría, elegido con el lock del proyecto tomado) sin
+	// cambiar su rank, guarda el motivo y registra el evento «descartado».
+	// FailedPrecondition (reason ISSUE_ALREADY_DISCARDED) si ya está en un
+	// estado CANCELED.
+	Discard(ctx context.Context, projectID string, number int32, statusID, reason, actorUID string) (*model.Issue, error)
+	// Restore pasa el issue al primer estado TODO del proyecto (elegido con
+	// el lock tomado), al final de esa columna, borra su Discard y registra el
+	// evento «restaurado». FailedPrecondition (reason ISSUE_NOT_DISCARDED) si
+	// no está en un estado CANCELED.
+	Restore(ctx context.Context, projectID string, number int32, actorUID string) (*model.Issue, error)
 	// AddComment guarda el comentario (ID, AuthorUID y Body ya seteados) en
 	// el issue y su evento.
 	AddComment(ctx context.Context, projectID string, number int32, comment *model.Comment) (*model.Comment, error)

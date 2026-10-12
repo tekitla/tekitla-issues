@@ -55,9 +55,54 @@ func IssueToProto(m *model.Issue) *issuesv1.Issue {
 		Rank:        m.Rank,
 		StatusId:    m.StatusID,
 		LabelIds:    m.LabelIDs,
+		Discard:     DiscardToProto(m.Discard),
 		CreatedAt:   TimestampToProto(m.CreatedAt),
 		UpdatedAt:   TimestampToProto(m.UpdatedAt),
 	}
+}
+
+// DiscardToProto convierte el motivo del descarte (nil -> ausente).
+func DiscardToProto(d *model.DiscardInfo) *issuesv1.DiscardInfo {
+	if d == nil {
+		return nil
+	}
+	return &issuesv1.DiscardInfo{Reason: d.Reason, ActorId: d.ActorUID, DiscardedAt: TimestampToProto(d.DiscardedAt)}
+}
+
+// IssueStatesFromProto convierte una lista de estados (filtro de ListIssues).
+func IssueStatesFromProto(states []issuesv1.IssueState) []model.IssueState {
+	out := make([]model.IssueState, len(states))
+	for i, s := range states {
+		out[i] = IssueStateFromProto(s)
+	}
+	return out
+}
+
+// PrioritiesFromProto convierte una lista de prioridades (filtro de
+// ListIssues).
+func PrioritiesFromProto(priorities []issuesv1.Priority) []model.Priority {
+	out := make([]model.Priority, len(priorities))
+	for i, p := range priorities {
+		out[i] = PriorityFromProto(p)
+	}
+	return out
+}
+
+// IssueOrderFromProto convierte el orden de ListIssues. UNSPECIFIED -> vacío
+// (rank); un valor desconocido queda inválido y la capa de aplicación lo
+// rechaza.
+func IssueOrderFromProto(o issuesv1.IssueOrder) model.IssueOrder {
+	switch o {
+	case issuesv1.IssueOrder_ISSUE_ORDER_UNSPECIFIED:
+		return model.IssueOrderUnspecified
+	case issuesv1.IssueOrder_ISSUE_ORDER_RANK:
+		return model.IssueOrderRank
+	case issuesv1.IssueOrder_ISSUE_ORDER_UPDATED_DESC:
+		return model.IssueOrderUpdatedDesc
+	case issuesv1.IssueOrder_ISSUE_ORDER_PRIORITY_DESC:
+		return model.IssueOrderPriorityDesc
+	}
+	return model.IssueOrder(fmt.Sprintf("unknown(%d)", int32(o)))
 }
 
 // IssuesToProto convierte un slice de Issues.

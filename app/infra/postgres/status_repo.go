@@ -17,11 +17,15 @@ import (
 // statusRow es la fila de issues.statuses. Category se guarda como texto
 // (mismos valores que issues.state) y Rank como TEXT COLLATE "C".
 type statusRow struct {
-	ID        string    `gorm:"primaryKey;column:id;type:uuid"`
-	ProjectID string    `gorm:"column:project_id;type:uuid;not null"`
-	Name      string    `gorm:"column:name;not null"`
-	Category  string    `gorm:"column:category;not null"`
-	Rank      string    `gorm:"column:rank;not null"`
+	ID        string `gorm:"primaryKey;column:id;type:uuid"`
+	ProjectID string `gorm:"column:project_id;type:uuid;not null"`
+	Name      string `gorm:"column:name;not null"`
+	Category  string `gorm:"column:category;not null"`
+	Rank      string `gorm:"column:rank;not null"`
+	// Color: mismo enum que labels.color (1..7). WIPLimit 0 = sin límite.
+	Color     int       `gorm:"column:color;not null"`
+	WIPLimit  int32     `gorm:"column:wip_limit;not null"`
+	Hidden    bool      `gorm:"column:hidden;not null"`
 	CreatedAt time.Time `gorm:"column:created_at"`
 	UpdatedAt time.Time `gorm:"column:updated_at"`
 }
@@ -96,8 +100,8 @@ func (r *StatusRepository) Create(ctx context.Context, status *model.Status, aft
 	return fromStatusRow(row), nil
 }
 
-// Update renombra y/o reubica el estado.
-func (r *StatusRepository) Update(ctx context.Context, projectID, id string, name, afterID *string) (*model.Status, error) {
+// Update aplica el patch: nombre, lugar, color, límite WIP y visibilidad.
+func (r *StatusRepository) Update(ctx context.Context, projectID, id string, patch port.StatusPatch) (*model.Status, error) {
 	var out *statusRow
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := lockProject(tx, projectID); err != nil {
@@ -108,10 +112,23 @@ func (r *StatusRepository) Update(ctx context.Context, projectID, id string, nam
 			return err
 		}
 		updates := map[string]any{"updated_at": dbNow()}
-		if name != nil {
-			updates["name"] = *name
+		if patch.Name != nil {
+			updates["name"] = *patch.Name
 		}
-		if afterID != nil {
+		if patch.Color != nil {
+			color, err := model.ResolveStatusColor(*patch.Color, model.IssueState(row.Category))
+			if err != nil {
+				return err
+			}
+			updates["color"] = int(color)
+		}
+		if patch.WIPLimit != nil {
+			updates["wip_limit"] = *patch.WIPLimit
+		}
+		if patch.Hidden != nil {
+			updates["hidden"] = *patch.Hidden
+		}
+		if afterID := patch.AfterID; afterID != nil {
 			rows, err := listStatusRows(tx, projectID)
 			if err != nil {
 				return err
@@ -230,8 +247,11 @@ func moveAllIssues(tx *gorm.DB, projectID string, from, to *statusRow, actorUID 
 	if err != nil {
 		return err
 	}
-	return tx.Model(&issueRow{}).Where("project_id = ? AND status_id = ?", projectID, from.ID).
-		Updates(map[string]any{"status_id": to.ID, "state": to.Category, "updated_at": now}).Error
+	updates := map[string]any{"status_id": to.ID, "state": to.Category, "updated_at": now}
+	if model.IssueState(to.Category) != model.IssueStateCanceled {
+		clearDiscard(updates)
+	}
+	return tx.Model(&issueRow{}).Where("project_id = ? AND status_id = ?", projectID, from.ID).Updates(updates).Error
 }
 
 // lockProject toma el lock de la fila del proyecto: serializa las escrituras
@@ -310,6 +330,9 @@ func toStatusRow(m *model.Status) *statusRow {
 		Name:      m.Name,
 		Category:  string(m.Category),
 		Rank:      m.Rank,
+		Color:     int(m.Color),
+		WIPLimit:  m.WIPLimit,
+		Hidden:    m.Hidden,
 		CreatedAt: m.CreatedAt,
 		UpdatedAt: m.UpdatedAt,
 	}
@@ -322,6 +345,9 @@ func fromStatusRow(r *statusRow) *model.Status {
 		Name:      r.Name,
 		Category:  model.IssueState(r.Category),
 		Rank:      r.Rank,
+		Color:     model.LabelColor(r.Color),
+		WIPLimit:  r.WIPLimit,
+		Hidden:    r.Hidden,
 		CreatedAt: r.CreatedAt,
 		UpdatedAt: r.UpdatedAt,
 	}
