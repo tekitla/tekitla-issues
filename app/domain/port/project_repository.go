@@ -32,8 +32,10 @@ type ProjectPage struct {
 //   - cursor inválido      -> domainerrors.ValidationError
 //   - cualquier otra cosa  -> domainerrors.InternalError
 type ProjectRepository interface {
-	// Create inserta el proyecto (ID, WorkspaceID y Key ya seteados).
-	Create(ctx context.Context, project *model.Project) (*model.Project, error)
+	// Create inserta el proyecto (ID, WorkspaceID y Key ya seteados) y sus
+	// estados iniciales (ID, Name y Category seteados; el repo les asigna
+	// ProjectID y un rank en el orden en que vienen) en una transacción.
+	Create(ctx context.Context, project *model.Project, statuses []*model.Status) (*model.Project, error)
 	// GetByID devuelve el proyecto si pertenece a uno de workspaceIDs
 	// (workspaceIDs vacío -> NotFound).
 	GetByID(ctx context.Context, workspaceIDs []string, id string) (*model.Project, error)

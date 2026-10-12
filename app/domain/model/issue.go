@@ -8,9 +8,8 @@ const (
 	IssueDescriptionMaxLen = 20000
 )
 
-// IssueState es la categoría fija del estado de un issue. En la rebanada 1 hay
-// un estado por categoría; los estados configurables por proyecto (rebanada 3)
-// se cuelgan de una de estas categorías.
+// IssueState es la categoría fija del estado de un issue. Los estados
+// concretos de cada proyecto (Status) se cuelgan de una de estas categorías.
 //
 // El valor vacío significa "sin especificar": como filtro de ListIssues es
 // "todos los estados"; como destino de MoveIssue es inválido.
@@ -70,7 +69,11 @@ type Issue struct {
 	Priority    Priority
 	// Rank es la posición en el orden manual del proyecto (ver rank.go). La
 	// asigna el repo al crear: al final del orden.
-	Rank      string
+	Rank string
+	// StatusID es el estado concreto (columna); State es su categoría.
+	StatusID string
+	// LabelIDs son las etiquetas, ordenadas por nombre de etiqueta.
+	LabelIDs  []string
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }

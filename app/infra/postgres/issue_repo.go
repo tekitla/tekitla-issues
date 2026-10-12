@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 
 	domainerrors "github.com/tekitla/tekitla-issues/app/domain/errors"
 	"github.com/tekitla/tekitla-issues/app/domain/model"
@@ -28,6 +27,7 @@ type issueRow struct {
 	State       string    `gorm:"column:state;not null"`
 	Priority    int       `gorm:"column:priority;not null"`
 	Rank        string    `gorm:"column:rank;not null"`
+	StatusID    string    `gorm:"column:status_id;type:uuid;not null"`
 	CreatedAt   time.Time `gorm:"column:created_at"`
 	UpdatedAt   time.Time `gorm:"column:updated_at"`
 }
@@ -57,7 +57,7 @@ var errProjectNotOwned = errors.New("project not found in workspaces")
 // sale del mayor rank del proyecto, leído con el lock tomado). Si el INSERT
 // falla, el rollback devuelve el número (no queda hueco); como no hay borrado
 // de issues, un número asignado nunca se reutiliza.
-func (r *IssueRepository) Create(ctx context.Context, workspaceIDs []string, issue *model.Issue) (*model.Issue, error) {
+func (r *IssueRepository) Create(ctx context.Context, workspaceIDs []string, issue *model.Issue, actorUID string) (*model.Issue, error) {
 	row := toIssueRow(issue)
 	now := dbNow()
 	row.CreatedAt, row.UpdatedAt = now, now
@@ -94,27 +94,39 @@ func (r *IssueRepository) Create(ctx context.Context, workspaceIDs []string, iss
 			return fmt.Errorf("rank after %q: %v", lastRank, err)
 		}
 
+		// El estado lo eligió el service antes de la transacción: con el lock
+		// del proyecto tomado, se verifica que siga existiendo.
+		if _, err := getStatusRow(tx, issue.ProjectID, issue.StatusID); errors.Is(err, gorm.ErrRecordNotFound) {
+			return statusGone(issue.StatusID)
+		} else if err != nil {
+			return err
+		}
+
 		row.Number = number
 		row.Rank = rank
-		return tx.Create(row).Error
+		if err := tx.Create(row).Error; err != nil {
+			return err
+		}
+		return insertEvent(tx, row.ID, actorUID, &model.IssueEvent{Kind: model.EventCreated}, now)
 	})
 	if errors.Is(err, errProjectNotOwned) {
 		return nil, domainerrors.NotFoundError("project not found", map[string]any{"id": issue.ProjectID})
 	}
 	if err != nil {
-		return nil, translateError(err, "issue", "create", map[string]any{"project_id": issue.ProjectID})
+		return nil, writeError(err, "issue", "create", map[string]any{"project_id": issue.ProjectID})
 	}
-	return fromIssueRow(row), nil
+	out := fromIssueRow(row)
+	out.LabelIDs = []string{}
+	return out, nil
 }
 
 // GetByNumber busca un issue por (project_id, number).
 func (r *IssueRepository) GetByNumber(ctx context.Context, projectID string, number int32) (*model.Issue, error) {
-	var row issueRow
-	err := r.db.WithContext(ctx).Where("project_id = ? AND number = ?", projectID, number).First(&row).Error
+	issue, err := getIssue(r.db.WithContext(ctx), projectID, number)
 	if err != nil {
 		return nil, translateError(err, "issue", "get", map[string]any{"project_id": projectID, "number": number})
 	}
-	return fromIssueRow(&row), nil
+	return issue, nil
 }
 
 // List pagina por keyset (rank ASC; rank es único por proyecto), con filtro
@@ -150,30 +162,14 @@ func (r *IssueRepository) List(ctx context.Context, filter port.IssueFilter) (*p
 	for i := range rows {
 		page.Issues[i] = fromIssueRow(&rows[i])
 	}
+	if err := attachLabels(r.db.WithContext(ctx), page.Issues); err != nil {
+		return nil, translateError(err, "issues", "list", map[string]any{"project_id": filter.ProjectID})
+	}
 	if hasNext && len(rows) > 0 {
 		last := rows[len(rows)-1]
 		page.NextCursor = encodeCursor(issueCursor{Rank: last.Rank})
 	}
 	return page, nil
-}
-
-// UpdateState cambia el estado (y updated_at) y devuelve la fila actualizada
-// con RETURNING. Sin filas afectadas -> NotFound.
-func (r *IssueRepository) UpdateState(ctx context.Context, projectID string, number int32, state model.IssueState) (*model.Issue, error) {
-	var rows []issueRow
-	res := r.db.WithContext(ctx).
-		Model(&rows).
-		Clauses(clause.Returning{}).
-		Where("project_id = ? AND number = ?", projectID, number).
-		Updates(map[string]any{"state": string(state), "updated_at": dbNow()})
-	details := map[string]any{"project_id": projectID, "number": number}
-	if res.Error != nil {
-		return nil, translateError(res.Error, "issue", "update", details)
-	}
-	if res.RowsAffected == 0 || len(rows) == 0 {
-		return nil, domainerrors.NotFoundError("issue not found", details)
-	}
-	return fromIssueRow(&rows[0]), nil
 }
 
 func toIssueRow(m *model.Issue) *issueRow {
@@ -186,6 +182,7 @@ func toIssueRow(m *model.Issue) *issueRow {
 		State:       string(m.State),
 		Priority:    int(m.Priority),
 		Rank:        m.Rank,
+		StatusID:    m.StatusID,
 		CreatedAt:   m.CreatedAt,
 		UpdatedAt:   m.UpdatedAt,
 	}
@@ -201,6 +198,7 @@ func fromIssueRow(r *issueRow) *model.Issue {
 		State:       model.IssueState(r.State),
 		Priority:    model.Priority(r.Priority),
 		Rank:        r.Rank,
+		StatusID:    r.StatusID,
 		CreatedAt:   r.CreatedAt,
 		UpdatedAt:   r.UpdatedAt,
 	}

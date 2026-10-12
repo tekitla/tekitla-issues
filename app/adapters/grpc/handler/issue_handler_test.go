@@ -40,6 +40,9 @@ type memStore struct {
 	projects   map[string]*model.Project
 	next       map[string]int32
 	issues     []*model.Issue
+	statuses   []*model.Status
+	labels     []*model.Label
+	events     []*model.IssueEvent
 }
 
 func newMemStore() *memStore {
@@ -53,11 +56,15 @@ func newMemStore() *memStore {
 type memWorkspaces struct{ *memStore }
 type memProjects struct{ *memStore }
 type memIssues struct{ *memStore }
+type memStatuses struct{ *memStore }
+type memLabels struct{ *memStore }
 
 var (
 	_ port.WorkspaceRepository = memWorkspaces{}
 	_ port.ProjectRepository   = memProjects{}
 	_ port.IssueRepository     = memIssues{}
+	_ port.StatusRepository    = memStatuses{}
+	_ port.LabelRepository     = memLabels{}
 )
 
 func (s memWorkspaces) GetPersonal(_ context.Context, ownerUID string) (*model.Workspace, error) {
@@ -79,7 +86,7 @@ func (s memWorkspaces) EnsurePersonal(_ context.Context, ws *model.Workspace) (*
 	return ws, nil
 }
 
-func (s memProjects) Create(_ context.Context, p *model.Project) (*model.Project, error) {
+func (s memProjects) Create(_ context.Context, p *model.Project, statuses []*model.Status) (*model.Project, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, other := range s.projects {
@@ -90,6 +97,12 @@ func (s memProjects) Create(_ context.Context, p *model.Project) (*model.Project
 	p.CreatedAt, p.UpdatedAt = time.Now(), time.Now()
 	s.projects[p.ID] = p
 	s.next[p.ID] = 1
+	rank := ""
+	for _, st := range statuses {
+		rank, _ = model.RankAfter(rank)
+		st.ProjectID, st.Rank = p.ID, rank
+		s.statuses = append(s.statuses, st)
+	}
 	return p, nil
 }
 
@@ -115,7 +128,7 @@ func (s memProjects) List(_ context.Context, workspaceIDs []string, _ port.PageF
 	return page, nil
 }
 
-func (s memIssues) Create(_ context.Context, workspaceIDs []string, issue *model.Issue) (*model.Issue, error) {
+func (s memIssues) Create(_ context.Context, workspaceIDs []string, issue *model.Issue, actorUID string) (*model.Issue, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if p, ok := s.projects[issue.ProjectID]; !ok || !slices.Contains(workspaceIDs, p.WorkspaceID) {
@@ -135,7 +148,9 @@ func (s memIssues) Create(_ context.Context, workspaceIDs []string, issue *model
 	issue.Number = s.next[issue.ProjectID]
 	s.next[issue.ProjectID]++
 	issue.CreatedAt, issue.UpdatedAt = time.Now(), time.Now()
+	issue.LabelIDs = []string{}
 	s.issues = append(s.issues, issue)
+	s.addEvent(issue.ID, actorUID, &model.IssueEvent{Kind: model.EventCreated})
 	return issue, nil
 }
 
@@ -170,25 +185,17 @@ func (s memIssues) List(_ context.Context, f port.IssueFilter) (*port.IssuePage,
 	return page, nil
 }
 
-func (s memIssues) UpdateState(_ context.Context, projectID string, number int32, state model.IssueState) (*model.Issue, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	it := s.find(projectID, number)
-	if it == nil {
-		return nil, domainerrors.NotFoundError("issue not found", nil)
-	}
-	it.State = state
-	return it, nil
-}
-
 func newClient(t *testing.T) issuesv1.IssueServiceClient {
 	t.Helper()
 
 	store := newMemStore()
 	workspaces, projects, issues := memWorkspaces{store}, memProjects{store}, memIssues{store}
+	statuses, labels := memStatuses{store}, memLabels{store}
 	h := handler.NewIssueHandler(zap.NewNop(),
 		application.NewProjectService(workspaces, projects),
-		application.NewIssueService(workspaces, projects, issues),
+		application.NewIssueService(workspaces, projects, issues, statuses, labels),
+		application.NewStatusService(workspaces, projects, statuses),
+		application.NewLabelService(workspaces, projects, labels),
 	)
 
 	lis := bufconn.Listen(1 << 20)

@@ -47,13 +47,17 @@ func main() {
 	workspaceRepo := postgres.NewWorkspaceRepository(infra.DB)
 	projectRepo := postgres.NewProjectRepository(infra.DB)
 	issueRepo := postgres.NewIssueRepository(infra.DB)
+	statusRepo := postgres.NewStatusRepository(infra.DB)
+	labelRepo := postgres.NewLabelRepository(infra.DB)
 
 	// 4. Servicios de aplicación
 	projectSvc := application.NewProjectService(workspaceRepo, projectRepo)
-	issueSvc := application.NewIssueService(workspaceRepo, projectRepo, issueRepo)
+	issueSvc := application.NewIssueService(workspaceRepo, projectRepo, issueRepo, statusRepo, labelRepo)
+	statusSvc := application.NewStatusService(workspaceRepo, projectRepo, statusRepo)
+	labelSvc := application.NewLabelService(workspaceRepo, projectRepo, labelRepo)
 
 	// 5. Handlers gRPC
-	issueHandler := handler.NewIssueHandler(infra.Logger, projectSvc, issueSvc)
+	issueHandler := handler.NewIssueHandler(infra.Logger, projectSvc, issueSvc, statusSvc, labelSvc)
 
 	// 6. Servidor gRPC
 	grpcServer := grpc.NewServer(

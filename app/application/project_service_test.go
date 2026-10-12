@@ -25,9 +25,10 @@ const (
 
 func TestCreateProject_Success(t *testing.T) {
 	var captured *model.Project
+	var statuses []*model.Status
 	repo := &mockProjectRepo{
-		createFn: func(_ context.Context, p *model.Project) (*model.Project, error) {
-			captured = p
+		createFn: func(_ context.Context, p *model.Project, st []*model.Status) (*model.Project, error) {
+			captured, statuses = p, st
 			return p, nil
 		},
 	}
@@ -49,11 +50,23 @@ func TestCreateProject_Success(t *testing.T) {
 	if got.WorkspaceID != ownerWorkspace || got.Key != "TK" || got.Name != "Tekitla" || got.Description != "tracker" {
 		t.Errorf("project: got %+v", got)
 	}
+	// Nace con un estado por categoría, en orden.
+	var categories []model.IssueState
+	for _, st := range statuses {
+		if _, err := uuid.Parse(st.ID); err != nil || st.Name == "" {
+			t.Errorf("status: got %+v", st)
+		}
+		categories = append(categories, st.Category)
+	}
+	want := []model.IssueState{model.IssueStateTodo, model.IssueStateInProgress, model.IssueStateDone, model.IssueStateCanceled}
+	if !slices.Equal(categories, want) {
+		t.Errorf("default statuses: got %v, want %v", categories, want)
+	}
 }
 
 func TestCreateProject_Validation(t *testing.T) {
 	repo := &mockProjectRepo{
-		createFn: func(context.Context, *model.Project) (*model.Project, error) {
+		createFn: func(context.Context, *model.Project, []*model.Status) (*model.Project, error) {
 			t.Fatal("repo.Create must not be called on invalid input")
 			return nil, nil
 		},
@@ -80,7 +93,7 @@ func TestCreateProject_RequiresOwner(t *testing.T) {
 
 func TestCreateProject_DuplicateKey(t *testing.T) {
 	repo := &mockProjectRepo{
-		createFn: func(context.Context, *model.Project) (*model.Project, error) {
+		createFn: func(context.Context, *model.Project, []*model.Status) (*model.Project, error) {
 			return nil, domainerrors.ConflictError("project already exists", nil)
 		},
 	}
@@ -97,7 +110,7 @@ func TestCreateProject_DuplicateKey(t *testing.T) {
 
 func TestCreateProject_PropagatesInternal(t *testing.T) {
 	repo := &mockProjectRepo{
-		createFn: func(context.Context, *model.Project) (*model.Project, error) {
+		createFn: func(context.Context, *model.Project, []*model.Status) (*model.Project, error) {
 			return nil, domainerrors.InternalError("failed to create project", nil)
 		},
 	}
@@ -182,7 +195,7 @@ func TestListProjects_ForeignWorkspaceIsEmpty(t *testing.T) {
 
 func TestCreateProject_InOwnWorkspace(t *testing.T) {
 	repo := &mockProjectRepo{
-		createFn: func(_ context.Context, p *model.Project) (*model.Project, error) { return p, nil },
+		createFn: func(_ context.Context, p *model.Project, _ []*model.Status) (*model.Project, error) { return p, nil },
 	}
 	in := application.CreateProjectInput{WorkspaceID: ownerWorkspace, Key: "TK", Name: "n"}
 	got, err := application.NewProjectService(personalWorkspaces(), repo).CreateProject(context.Background(), owner, in)
@@ -196,7 +209,7 @@ func TestCreateProject_InOwnWorkspace(t *testing.T) {
 
 func TestCreateProject_ForeignWorkspaceIsNotFound(t *testing.T) {
 	repo := &mockProjectRepo{
-		createFn: func(context.Context, *model.Project) (*model.Project, error) {
+		createFn: func(context.Context, *model.Project, []*model.Status) (*model.Project, error) {
 			t.Fatal("repo.Create must not be called for a foreign workspace")
 			return nil, nil
 		},
@@ -244,7 +257,7 @@ func TestCreateProject_PropagatesWorkspaceError(t *testing.T) {
 		},
 	}
 	repo := &mockProjectRepo{
-		createFn: func(context.Context, *model.Project) (*model.Project, error) {
+		createFn: func(context.Context, *model.Project, []*model.Status) (*model.Project, error) {
 			t.Fatal("repo.Create must not be called when the workspace fails")
 			return nil, nil
 		},
@@ -265,7 +278,7 @@ func TestCreateProject_CreatesPersonalWorkspace(t *testing.T) {
 		},
 	}
 	repo := &mockProjectRepo{
-		createFn: func(_ context.Context, p *model.Project) (*model.Project, error) { return p, nil },
+		createFn: func(_ context.Context, p *model.Project, _ []*model.Status) (*model.Project, error) { return p, nil },
 	}
 	got, err := application.NewProjectService(workspaces, repo).CreateProject(context.Background(), owner, application.CreateProjectInput{Key: "TK", Name: "n"})
 	if err != nil {

@@ -75,7 +75,11 @@ func (s *ProjectService) CreateProject(ctx context.Context, ownerUID string, in 
 		Name:        name,
 		Description: desc,
 	}
-	created, err := s.repo.Create(ctx, project)
+	statuses := make([]*model.Status, len(model.DefaultStatuses))
+	for i, d := range model.DefaultStatuses {
+		statuses[i] = &model.Status{ID: uuid.NewString(), Name: d.Name, Category: d.Category}
+	}
+	created, err := s.repo.Create(ctx, project, statuses)
 	if err != nil {
 		if domainerrors.IsConflict(err) {
 			return nil, domainerrors.ConflictError("project key already exists", map[string]any{"key": key}).

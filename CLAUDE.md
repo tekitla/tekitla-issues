@@ -2,14 +2,16 @@
 
 ## Qué es este servicio
 
-Proyectos e issues de Tekitla (issue 002, rebanada 1): proyectos dentro de un
-espacio de trabajo (en la rebanada 1, el personal de cada usuario) y sus issues,
-con estados por categoría fija (por hacer, en curso, hecho, descartado) y orden
-manual por `rank`.
+Proyectos e issues de Tekitla (issue 002): proyectos dentro de un espacio de
+trabajo (hoy, el personal de cada usuario) y sus issues, con estados
+configurables por proyecto (cada uno de una categoría fija: por hacer, en
+curso, hecho, descartado), orden manual por `rank`, etiquetas, comentarios e
+historial (rebanada 3a).
 
 - **Contrato**: `issues.v1.IssueService` de `github.com/tekitla/tekitla-protos`
-  (`gen/go/issues/v1`): `ListProjects`, `CreateProject`, `ListIssues`,
-  `GetIssue`, `CreateIssue`, `MoveIssue`. Los comentarios del `.proto` son la
+  (`gen/go/issues/v1`): proyectos, issues (`ListIssues`, `GetIssue`,
+  `CreateIssue`, `MoveIssue`, `UpdateIssue`), estados, etiquetas,
+  `CreateComment` y `ListIssueEvents`. Los comentarios del `.proto` son la
   especificación.
 - **Quién lo llama**: solo el `tekitla-gateway` (api-gateway), que autentica y
   propaga la identidad en la metadata gRPC `x-user-id` (además `x-roles` y
@@ -40,15 +42,38 @@ Reglas de negocio no obvias:
   `IssueRepository.Create` con `UPDATE projects SET next_issue_number = next_issue_number + 1
   ... RETURNING` en la misma transacción del `INSERT` (lock de fila: seguro con
   concurrencia).
-- Issue nuevo: estado `TODO`; prioridad `UNSPECIFIED` se guarda como `MEDIUM`;
-  `rank` al final del orden del proyecto (`model.RankAfter` del mayor rank,
-  leído en la misma transacción con el lock de la fila del proyecto).
+- Issue nuevo: primer estado (por rank) de la categoría `TODO`; prioridad
+  `UNSPECIFIED` se guarda como `MEDIUM`; `rank` al final del orden del
+  proyecto (`model.RankAfter` del mayor rank, leído en la misma transacción con
+  el lock de la fila del proyecto).
+- Estados (`issues.statuses`): todo proyecto nace con cuatro, uno por categoría
+  (`model.DefaultStatuses`); máximo 20; nombre único sin mayúsculas
+  (`ALREADY_EXISTS`, reason `STATUS_NAME_TAKEN`); la categoría no cambia; no se
+  borra el último de una categoría (`FAILED_PRECONDITION`, reason
+  `LAST_STATUS_OF_CATEGORY`) ni uno con issues sin `move_to_status_id`
+  (`STATUS_HAS_ISSUES`). `issues.state` es siempre la categoría de
+  `issues.status_id`: lo asegura la FK compuesta `(status_id, project_id,
+  state)` → `statuses (id, project_id, category)`.
+- `MoveIssue`: `status_id` manda; con solo `state` va al primer estado de esa
+  categoría, o no cambia si el issue ya está en ella. Reordenar
+  (`after_number`/`before_number`): el rank sale entre el vecino y la clave
+  contigua de **todo** el proyecto (`placeRank`), así nunca choca con un issue
+  de otra columna; vecinos que no están en la columna destino o fuera de orden
+  → `FAILED_PRECONDITION` (reason `STALE_ORDER`). Toma el lock del proyecto.
+- Historial (`issues.issue_events`): toda escritura de un issue registra su
+  evento en la misma transacción (creado, estado, título, descripción,
+  prioridad, etiquetas, comentario); reordenar no. Orden por `seq` (identity).
+  El JSONB `data` guarda los nombres de estados y etiquetas al momento del
+  cambio (DTOs en `event_repo.go`: solo agregar campos).
+- Etiquetas: máximo 100 por proyecto y 20 por issue; nombre único sin
+  mayúsculas (`LABEL_NAME_TAKEN`); borrar una la quita de los issues sin evento.
 - `rank`: *fractional indexing* (`model/rank.go`, port de `fractional-indexing`
   de rocicorp): base 62, se compara byte a byte (columna `COLLATE "C"`), entre
   dos claves siempre hay otra (`model.RankBetween`, para reordenar en la
   rebanada 3). Agregar al final da `a0`, `a1`, …, `az`, `b00`.
-- `MoveIssue` con estado `UNSPECIFIED` (o desconocido) → `INVALID_ARGUMENT`.
-  Un valor de enum desconocido en el filtro de `ListIssues` también.
+- `MoveIssue` sin `status_id` y con estado `UNSPECIFIED` (o desconocido) →
+  `INVALID_ARGUMENT`; un `status_id` de otro proyecto también. Un valor de
+  enum desconocido en el filtro de `ListIssues` también.
 - `CANCELED` (`canceled` en la base) es un estado más: `MoveIssue` lo acepta y
   `ListIssues` sin filtro lo incluye (el panel lo oculta).
 - Orden: proyectos por `name, id`; issues por `rank` (único por proyecto). Un cursor del orden
@@ -122,15 +147,18 @@ compose, ver `cli/healthcheck.go`) y reflection fuera de prod.
   para `has_next`. Default 50 / máximo 100 en `application/common.go`.
   Cursor mal formado → `INVALID_ARGUMENT`.
 - Tablas: `issues.workspaces` (único `owner_uid`), `issues.projects` (FK al
-  espacio, único `workspace_id, key`; `next_issue_number`) e `issues.issues` (FK
-  al proyecto, únicos `project_id, number` y `project_id, rank`; `state` texto
-  `todo|in_progress|done|canceled` y `priority` 1..4, ambos con `CHECK`; `rank`
-  `TEXT COLLATE "C"`). Timestamps truncados a microsegundos en el repo (`dbNow`).
+  espacio, único `workspace_id, key`; `next_issue_number`), `issues.issues` (FK
+  al proyecto y a su estado, únicos `project_id, number` y `project_id, rank`;
+  `state` texto `todo|in_progress|done|canceled` y `priority` 1..4, ambos con
+  `CHECK`; `rank` `TEXT COLLATE "C"`), `issues.statuses`, `issues.labels`,
+  `issues.issue_labels`, `issues.comments` e `issues.issue_events`. Timestamps
+  truncados a microsegundos en el repo (`dbNow`).
 - JSONB: DTOs unexported separados del dominio + `encoding/json`.
 - Migraciones en `migrations/NNNNNN_desc.{up,down}.sql`, aplicadas a mano
-  (`DATABASE_URL=... scripts/apply_migration.sh <qa|prod> <migración>`). Hoy:
-  `000001` crea el schema y `000002` las tablas; mientras nada esté
-  desplegado, corregir esas dos en vez de sumar migraciones. El `docker-compose.yml` local las aplica
+  (`DATABASE_URL=... scripts/apply_migration.sh <qa|prod> <migración>`).
+  `000001` crea el schema, `000002` las tablas de la rebanada 1 y `000003` las
+  de la 3a con backfill (estados de cada proyecto, `status_id` de cada issue y
+  el evento «creado»). El `docker-compose.yml` local las aplica
   solo al crear el volumen (`docker compose down -v` para empezar de cero).
 - Copiar los datos del servicio entre dos Postgres (con verificación de filas):
   `scripts/migrate_db.sh SRC_URL DST_URL` (dry-run; `--apply` para ejecutar).
@@ -169,6 +197,9 @@ git tag prod-v0.1.0 && git push origin prod-v0.1.0   # prod, automático salvo m
 
 - La imagen se publica con el tag inmutable (`qa-v0.1.0`) y uno móvil (`qa`/`prod`);
   el recurso de Coolify usa `IMAGE_TAG=qa|prod`.
+- `000003` no es compatible con el binario anterior (exige `status_id` y estados
+  por proyecto): se aplica y se despliega la imagen nueva en seguida, sin
+  tráfico de por medio. Hoy no aplica: nada está desplegado todavía.
 - Release con cambios en `migrations/`: la guarda de prod bloquea. Aplicar el
   SQL por túnel SSH (`scripts/apply_migration.sh prod <migración> --apply`) y
   lanzar el override.
@@ -180,7 +211,7 @@ git tag prod-v0.1.0 && git push origin prod-v0.1.0   # prod, automático salvo m
 
 ## Protos
 
-Repo de protos: `github.com/tekitla/tekitla-protos`, hoy en `v0.2.0`
+Repo de protos: `github.com/tekitla/tekitla-protos`, hoy en `v0.3.0`
 (`go.mod`). Paquete Go `github.com/tekitla/tekitla-protos/gen/go/issues/v1`
 (alias `issuesv1`), usado solo en `handler/`, `mapper/` y `cli/main.go`.
 

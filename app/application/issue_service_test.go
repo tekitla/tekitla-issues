@@ -63,17 +63,66 @@ func failIssueRepo(t *testing.T) *mockIssueRepo {
 	t.Helper()
 	fail := func() { t.Helper(); t.Fatal("issue repo must not be called") }
 	return &mockIssueRepo{
-		createFn: func(context.Context, []string, *model.Issue) (*model.Issue, error) { fail(); return nil, nil },
+		createFn: func(context.Context, []string, *model.Issue, string) (*model.Issue, error) {
+			fail()
+			return nil, nil
+		},
 		getByNumberFn: func(context.Context, string, int32) (*model.Issue, error) {
 			fail()
 			return nil, nil
 		},
 		listFn: func(context.Context, port.IssueFilter) (*port.IssuePage, error) { fail(); return nil, nil },
-		updateStateFn: func(context.Context, string, int32, model.IssueState) (*model.Issue, error) {
+		moveFn: func(context.Context, string, int32, *model.Status, port.Placement, string) (*model.Issue, error) {
+			fail()
+			return nil, nil
+		},
+		updateFn: func(context.Context, string, int32, model.IssuePatch, string) (*model.Issue, error) {
+			fail()
+			return nil, nil
+		},
+		addCommentFn: func(context.Context, string, int32, *model.Comment) (*model.Comment, error) {
+			fail()
+			return nil, nil
+		},
+		listEventsFn: func(context.Context, string, int32, port.PageFilter) (*port.EventPage, error) {
 			fail()
 			return nil, nil
 		},
 	}
+}
+
+// Estados del proyecto validID en los tests: los cuatro de un proyecto nuevo.
+var (
+	stTodo     = &model.Status{ID: "11111111-1111-4111-8111-111111111111", ProjectID: validID, Name: "Por hacer", Category: model.IssueStateTodo, Rank: "a0"}
+	stDoing    = &model.Status{ID: "22222222-2222-4222-8222-222222222222", ProjectID: validID, Name: "En curso", Category: model.IssueStateInProgress, Rank: "a1"}
+	stDone     = &model.Status{ID: "33333333-3333-4333-8333-333333333333", ProjectID: validID, Name: "Hecho", Category: model.IssueStateDone, Rank: "a2"}
+	stCanceled = &model.Status{ID: "44444444-4444-4444-8444-444444444444", ProjectID: validID, Name: "Descartado", Category: model.IssueStateCanceled, Rank: "a3"}
+	// stReview es un segundo estado «en curso», que no existe por default.
+	stReview = &model.Status{ID: "55555555-5555-4555-8555-555555555555", ProjectID: validID, Name: "En revisión", Category: model.IssueStateInProgress, Rank: "a1V"}
+)
+
+// projectStatuses devuelve un repo de estados con los cuatro de default (más
+// los extra, en orden de rank). Get de un id que no está da NotFound.
+func projectStatuses(extra ...*model.Status) *mockStatusRepo {
+	all := []*model.Status{stTodo, stDoing}
+	all = append(all, extra...)
+	all = append(all, stDone, stCanceled)
+	return &mockStatusRepo{
+		listFn: func(context.Context, string) ([]*model.Status, error) { return all, nil },
+		getFn: func(_ context.Context, _, id string) (*model.Status, error) {
+			for _, st := range all {
+				if st.ID == id {
+					return st, nil
+				}
+			}
+			return nil, domainerrors.NotFoundError("status not found", nil)
+		},
+	}
+}
+
+// newIssueSvc arma el service con los estados de default y sin etiquetas.
+func newIssueSvc(ws port.WorkspaceRepository, projects port.ProjectRepository, issues port.IssueRepository) *application.IssueService {
+	return application.NewIssueService(ws, projects, issues, projectStatuses(), &mockLabelRepo{})
 }
 
 func isUnauthenticated(err error) bool {
@@ -90,7 +139,7 @@ func asDomainError(err error, target **domainerrors.DomainError) bool {
 // ================================================================
 
 func TestIssueService_ForeignProjectIsNotFound(t *testing.T) {
-	svc := application.NewIssueService(personalWorkspaces(), ownedProjects(), failIssueRepo(t))
+	svc := newIssueSvc(personalWorkspaces(), ownedProjects(), failIssueRepo(t))
 	ctx := context.Background()
 
 	if _, err := svc.ListIssues(ctx, otherOwner, application.ListIssuesInput{ProjectID: validID}); !domainerrors.IsNotFound(err) {
@@ -108,14 +157,14 @@ func TestIssueService_ForeignProjectIsNotFound(t *testing.T) {
 }
 
 func TestIssueService_RequiresOwner(t *testing.T) {
-	svc := application.NewIssueService(personalWorkspaces(), ownedProjects(), failIssueRepo(t))
+	svc := newIssueSvc(personalWorkspaces(), ownedProjects(), failIssueRepo(t))
 	if _, err := svc.GetIssue(context.Background(), "", validID, 1); !isUnauthenticated(err) {
 		t.Errorf("expected UnauthorizedError, got %v", err)
 	}
 }
 
 func TestIssueService_InvalidProjectID(t *testing.T) {
-	svc := application.NewIssueService(personalWorkspaces(), ownedProjects(), failIssueRepo(t))
+	svc := newIssueSvc(personalWorkspaces(), ownedProjects(), failIssueRepo(t))
 	for _, id := range []string{"", "not-a-uuid"} {
 		if _, err := svc.ListIssues(context.Background(), owner, application.ListIssuesInput{ProjectID: id}); !domainerrors.IsValidation(err) {
 			t.Errorf("project_id %q: expected ValidationError, got %v", id, err)
@@ -130,14 +179,17 @@ func TestIssueService_InvalidProjectID(t *testing.T) {
 func TestCreateIssue_DefaultsPriorityAndState(t *testing.T) {
 	var gotWorkspaces []string
 	issues := &mockIssueRepo{
-		createFn: func(_ context.Context, ws []string, issue *model.Issue) (*model.Issue, error) {
+		createFn: func(_ context.Context, ws []string, issue *model.Issue, actor string) (*model.Issue, error) {
 			gotWorkspaces = ws
+			if actor != owner {
+				t.Errorf("actor: got %q", actor)
+			}
 			issue.Number = 1
 			return issue, nil
 		},
 	}
 
-	got, err := application.NewIssueService(personalWorkspaces(), ownedProjects(), issues).CreateIssue(context.Background(), owner, application.CreateIssueInput{
+	got, err := newIssueSvc(personalWorkspaces(), ownedProjects(), issues).CreateIssue(context.Background(), owner, application.CreateIssueInput{
 		ProjectID:   validID,
 		Title:       "  Primer issue ",
 		Description: " cuerpo ",
@@ -151,8 +203,8 @@ func TestCreateIssue_DefaultsPriorityAndState(t *testing.T) {
 	if got.Priority != model.PriorityMedium {
 		t.Errorf("priority: got %d, want Medium", got.Priority)
 	}
-	if got.State != model.IssueStateTodo {
-		t.Errorf("state: got %q, want todo", got.State)
+	if got.State != model.IssueStateTodo || got.StatusID != stTodo.ID {
+		t.Errorf("state: got %q / %q, want the first todo status", got.State, got.StatusID)
 	}
 	if got.Title != "Primer issue" || got.Description != "cuerpo" || got.ProjectID != validID || got.ID == "" {
 		t.Errorf("issue: got %+v", got)
@@ -161,9 +213,11 @@ func TestCreateIssue_DefaultsPriorityAndState(t *testing.T) {
 
 func TestCreateIssue_KeepsExplicitPriority(t *testing.T) {
 	issues := &mockIssueRepo{
-		createFn: func(_ context.Context, _ []string, issue *model.Issue) (*model.Issue, error) { return issue, nil },
+		createFn: func(_ context.Context, _ []string, issue *model.Issue, _ string) (*model.Issue, error) {
+			return issue, nil
+		},
 	}
-	got, err := application.NewIssueService(personalWorkspaces(), ownedProjects(), issues).CreateIssue(context.Background(), owner, application.CreateIssueInput{
+	got, err := newIssueSvc(personalWorkspaces(), ownedProjects(), issues).CreateIssue(context.Background(), owner, application.CreateIssueInput{
 		ProjectID: validID, Title: "x", Priority: model.PriorityUrgent,
 	})
 	if err != nil {
@@ -175,7 +229,7 @@ func TestCreateIssue_KeepsExplicitPriority(t *testing.T) {
 }
 
 func TestCreateIssue_Validation(t *testing.T) {
-	svc := application.NewIssueService(personalWorkspaces(), ownedProjects(), failIssueRepo(t))
+	svc := newIssueSvc(personalWorkspaces(), ownedProjects(), failIssueRepo(t))
 	for name, in := range map[string]application.CreateIssueInput{
 		"empty title":      {ProjectID: validID, Title: "  "},
 		"unknown priority": {ProjectID: validID, Title: "x", Priority: model.Priority(9)},
@@ -188,11 +242,11 @@ func TestCreateIssue_Validation(t *testing.T) {
 
 func TestCreateIssue_PropagatesRepoError(t *testing.T) {
 	issues := &mockIssueRepo{
-		createFn: func(context.Context, []string, *model.Issue) (*model.Issue, error) {
+		createFn: func(context.Context, []string, *model.Issue, string) (*model.Issue, error) {
 			return nil, domainerrors.InternalError("failed to create issue", nil)
 		},
 	}
-	_, err := application.NewIssueService(personalWorkspaces(), ownedProjects(), issues).CreateIssue(context.Background(), owner, application.CreateIssueInput{ProjectID: validID, Title: "x"})
+	_, err := newIssueSvc(personalWorkspaces(), ownedProjects(), issues).CreateIssue(context.Background(), owner, application.CreateIssueInput{ProjectID: validID, Title: "x"})
 	if !domainerrors.IsInternal(err) {
 		t.Fatalf("expected InternalError, got %v", err)
 	}
@@ -202,25 +256,31 @@ func TestCreateIssue_PropagatesRepoError(t *testing.T) {
 // MoveIssue
 // ================================================================
 
+// todoIssue: el issue number está en «Por hacer».
+func todoIssue(_ context.Context, projectID string, number int32) (*model.Issue, error) {
+	return &model.Issue{ProjectID: projectID, Number: number, State: model.IssueStateTodo, StatusID: stTodo.ID}, nil
+}
+
+// moveTo devuelve el issue en el estado destino.
+func moveTo(_ context.Context, projectID string, number int32, target *model.Status, _ port.Placement, _ string) (*model.Issue, error) {
+	return &model.Issue{ProjectID: projectID, Number: number, State: target.Category, StatusID: target.ID}, nil
+}
+
 func TestMoveIssue_Success(t *testing.T) {
-	issues := &mockIssueRepo{
-		updateStateFn: func(_ context.Context, projectID string, number int32, state model.IssueState) (*model.Issue, error) {
-			return &model.Issue{ProjectID: projectID, Number: number, State: state}, nil
-		},
-	}
-	got, err := application.NewIssueService(personalWorkspaces(), ownedProjects(), issues).MoveIssue(context.Background(), owner, application.MoveIssueInput{
+	issues := &mockIssueRepo{getByNumberFn: todoIssue, moveFn: moveTo}
+	got, err := newIssueSvc(personalWorkspaces(), ownedProjects(), issues).MoveIssue(context.Background(), owner, application.MoveIssueInput{
 		ProjectID: validID, Number: 3, State: model.IssueStateInProgress,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got.Number != 3 || got.State != model.IssueStateInProgress {
+	if got.Number != 3 || got.State != model.IssueStateInProgress || got.StatusID != stDoing.ID {
 		t.Errorf("issue: got %+v", got)
 	}
 }
 
 func TestMoveIssue_InvalidState(t *testing.T) {
-	svc := application.NewIssueService(personalWorkspaces(), ownedProjects(), failIssueRepo(t))
+	svc := newIssueSvc(personalWorkspaces(), ownedProjects(), failIssueRepo(t))
 	for _, st := range []model.IssueState{model.IssueStateUnspecified, "blocked"} {
 		_, err := svc.MoveIssue(context.Background(), owner, application.MoveIssueInput{ProjectID: validID, Number: 1, State: st})
 		if !domainerrors.IsValidation(err) {
@@ -230,7 +290,7 @@ func TestMoveIssue_InvalidState(t *testing.T) {
 }
 
 func TestMoveIssue_InvalidNumber(t *testing.T) {
-	svc := application.NewIssueService(personalWorkspaces(), ownedProjects(), failIssueRepo(t))
+	svc := newIssueSvc(personalWorkspaces(), ownedProjects(), failIssueRepo(t))
 	_, err := svc.MoveIssue(context.Background(), owner, application.MoveIssueInput{ProjectID: validID, Number: 0, State: model.IssueStateDone})
 	if !domainerrors.IsValidation(err) {
 		t.Fatalf("expected ValidationError, got %v", err)
@@ -239,11 +299,11 @@ func TestMoveIssue_InvalidNumber(t *testing.T) {
 
 func TestMoveIssue_PropagatesNotFound(t *testing.T) {
 	issues := &mockIssueRepo{
-		updateStateFn: func(context.Context, string, int32, model.IssueState) (*model.Issue, error) {
+		getByNumberFn: func(context.Context, string, int32) (*model.Issue, error) {
 			return nil, domainerrors.NotFoundError("issue not found", nil)
 		},
 	}
-	_, err := application.NewIssueService(personalWorkspaces(), ownedProjects(), issues).MoveIssue(context.Background(), owner, application.MoveIssueInput{
+	_, err := newIssueSvc(personalWorkspaces(), ownedProjects(), issues).MoveIssue(context.Background(), owner, application.MoveIssueInput{
 		ProjectID: validID, Number: 99, State: model.IssueStateDone,
 	})
 	if !domainerrors.IsNotFound(err) {
@@ -261,7 +321,7 @@ func TestGetIssue_Success(t *testing.T) {
 			return &model.Issue{ProjectID: projectID, Number: number}, nil
 		},
 	}
-	got, err := application.NewIssueService(personalWorkspaces(), ownedProjects(), issues).GetIssue(context.Background(), owner, validID, 7)
+	got, err := newIssueSvc(personalWorkspaces(), ownedProjects(), issues).GetIssue(context.Background(), owner, validID, 7)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -271,7 +331,7 @@ func TestGetIssue_Success(t *testing.T) {
 }
 
 func TestGetIssue_InvalidNumber(t *testing.T) {
-	svc := application.NewIssueService(personalWorkspaces(), ownedProjects(), failIssueRepo(t))
+	svc := newIssueSvc(personalWorkspaces(), ownedProjects(), failIssueRepo(t))
 	if _, err := svc.GetIssue(context.Background(), owner, validID, -1); !domainerrors.IsValidation(err) {
 		t.Fatalf("expected ValidationError, got %v", err)
 	}
@@ -285,7 +345,7 @@ func TestListIssues_PassesFilter(t *testing.T) {
 			return &port.IssuePage{NextCursor: "next", HasNext: true}, nil
 		},
 	}
-	page, err := application.NewIssueService(personalWorkspaces(), ownedProjects(), issues).ListIssues(context.Background(), owner, application.ListIssuesInput{
+	page, err := newIssueSvc(personalWorkspaces(), ownedProjects(), issues).ListIssues(context.Background(), owner, application.ListIssuesInput{
 		ProjectID: validID, State: model.IssueStateDone, Cursor: "abc", Limit: 500,
 	})
 	if err != nil {
@@ -301,7 +361,7 @@ func TestListIssues_PassesFilter(t *testing.T) {
 }
 
 func TestListIssues_InvalidStateFilter(t *testing.T) {
-	svc := application.NewIssueService(personalWorkspaces(), ownedProjects(), failIssueRepo(t))
+	svc := newIssueSvc(personalWorkspaces(), ownedProjects(), failIssueRepo(t))
 	_, err := svc.ListIssues(context.Background(), owner, application.ListIssuesInput{ProjectID: validID, State: "blocked"})
 	if !domainerrors.IsValidation(err) {
 		t.Fatalf("expected ValidationError, got %v", err)
@@ -309,12 +369,8 @@ func TestListIssues_InvalidStateFilter(t *testing.T) {
 }
 
 func TestMoveIssue_Canceled(t *testing.T) {
-	issues := &mockIssueRepo{
-		updateStateFn: func(_ context.Context, projectID string, number int32, state model.IssueState) (*model.Issue, error) {
-			return &model.Issue{ProjectID: projectID, Number: number, State: state}, nil
-		},
-	}
-	got, err := application.NewIssueService(personalWorkspaces(), ownedProjects(), issues).MoveIssue(context.Background(), owner, application.MoveIssueInput{
+	issues := &mockIssueRepo{getByNumberFn: todoIssue, moveFn: moveTo}
+	got, err := newIssueSvc(personalWorkspaces(), ownedProjects(), issues).MoveIssue(context.Background(), owner, application.MoveIssueInput{
 		ProjectID: validID, Number: 3, State: model.IssueStateCanceled,
 	})
 	if err != nil {
@@ -331,7 +387,7 @@ func TestIssueService_PropagatesWorkspaceError(t *testing.T) {
 			return nil, domainerrors.InternalError("failed to get workspace", nil)
 		},
 	}
-	svc := application.NewIssueService(workspaces, ownedProjects(), failIssueRepo(t))
+	svc := newIssueSvc(workspaces, ownedProjects(), failIssueRepo(t))
 	if _, err := svc.GetIssue(context.Background(), owner, validID, 1); !domainerrors.IsInternal(err) {
 		t.Fatalf("expected InternalError, got %v", err)
 	}
@@ -340,7 +396,7 @@ func TestIssueService_PropagatesWorkspaceError(t *testing.T) {
 // Un usuario sin espacio (nunca creó un proyecto) no ve proyectos ajenos y la
 // lectura no crea el espacio.
 func TestIssueService_UserWithoutWorkspaceIsNotFound(t *testing.T) {
-	svc := application.NewIssueService(noWorkspaces(t), ownedProjects(), failIssueRepo(t))
+	svc := newIssueSvc(noWorkspaces(t), ownedProjects(), failIssueRepo(t))
 	if _, err := svc.GetIssue(context.Background(), owner, validID, 1); !domainerrors.IsNotFound(err) {
 		t.Fatalf("expected NotFound, got %v", err)
 	}
