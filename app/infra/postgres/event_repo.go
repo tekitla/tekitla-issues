@@ -109,9 +109,7 @@ func insertEvent(tx *gorm.DB, issueID, actorUID string, ev *model.IssueEvent, at
 func eventData(ev *model.IssueEvent) ([]byte, error) {
 	var v any = struct{}{}
 	switch ev.Kind {
-	case model.EventStatusChanged:
-		v = toStatusChangeData(ev.Status)
-	case model.EventRestored:
+	case model.EventStatusChanged, model.EventRestored:
 		v = toStatusChangeData(ev.Status)
 	case model.EventDiscarded:
 		v = discardedData{statusChangeData: toStatusChangeData(ev.Status), Reason: ev.Reason}

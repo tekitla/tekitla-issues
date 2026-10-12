@@ -276,8 +276,9 @@ func (s *IssueService) DiscardIssue(ctx context.Context, ownerUID string, in Dis
 	if err != nil {
 		return nil, err
 	}
-	var target *model.Status
 	if in.StatusID != "" {
+		// La categoría de un estado no cambia: se puede validar fuera de la
+		// transacción. Si se borra mientras tanto, el repo lo detecta.
 		if err := validateUUID("status_id", in.StatusID); err != nil {
 			return nil, err
 		}
@@ -291,11 +292,8 @@ func (s *IssueService) DiscardIssue(ctx context.Context, ownerUID string, in Dis
 		if status.Category != model.IssueStateCanceled {
 			return nil, domainerrors.ValidationError("status is not a canceled status", map[string]any{"field": "status_id", "value": in.StatusID})
 		}
-		target = status
-	} else if target, err = s.firstStatusOf(ctx, in.ProjectID, model.IssueStateCanceled); err != nil {
-		return nil, err
 	}
-	return s.issues.Discard(ctx, in.ProjectID, in.Number, target, reason, ownerUID)
+	return s.issues.Discard(ctx, in.ProjectID, in.Number, in.StatusID, reason, ownerUID)
 }
 
 // RestoreIssue restaura un issue descartado: lo pasa al primer estado «por
@@ -307,25 +305,7 @@ func (s *IssueService) RestoreIssue(ctx context.Context, ownerUID, projectID str
 	if err := validateIssueNumber(number); err != nil {
 		return nil, err
 	}
-	target, err := s.firstStatusOf(ctx, projectID, model.IssueStateTodo)
-	if err != nil {
-		return nil, err
-	}
-	return s.issues.Restore(ctx, projectID, number, target, ownerUID)
-}
-
-// firstStatusOf devuelve el primer estado de la categoría. Todo proyecto
-// tiene al menos uno por categoría: si falta, es un problema de datos.
-func (s *IssueService) firstStatusOf(ctx context.Context, projectID string, category model.IssueState) (*model.Status, error) {
-	statuses, err := s.statuses.List(ctx, projectID)
-	if err != nil {
-		return nil, err
-	}
-	st := model.FirstStatusOf(statuses, category)
-	if st == nil {
-		return nil, domainerrors.InternalError("project has no status for the category", map[string]any{"project_id": projectID, "state": string(category)})
-	}
-	return st, nil
+	return s.issues.Restore(ctx, projectID, number, ownerUID)
 }
 
 // UpdateIssue edita título, descripción, prioridad o etiquetas de un issue.

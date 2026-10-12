@@ -91,7 +91,10 @@ Reglas de negocio no obvias:
   `translate` + `lower`, sin extensiones) y LIKE escapado; si es un número
   (`12`) o una clave del proyecto (`TK-12`, la key sin mayúsculas) trae
   también ese issue (`model.ParseIssueSearch`). Orden `rank`, `updated_at
-  DESC` o `priority DESC`, siempre con `rank` de desempate. El cursor lleva
+  DESC` o `priority DESC`, siempre con `rank` de desempate. Con
+  `updated_at`, un issue que cambia entre dos páginas salta adelante del
+  cursor y no aparece en las siguientes (keyset sobre una columna que se
+  mueve): el panel recarga desde la primera página. El cursor lleva
   la huella de filtros y orden (`issueFilterFingerprint`): usarlo con otros →
   `INVALID_ARGUMENT`.
 - Estados (013): `color` (mismo enum que las etiquetas; `UNSPECIFIED` = el
@@ -103,7 +106,9 @@ Reglas de negocio no obvias:
   `STALE_STATUSES`) y el repo lo guarda con el lock del proyecto, con nombres
   y ranks provisorios para no chocar con los índices únicos a mitad del
   cambio. Ranks nuevos por posición (`a0`, `a1`, …). Sin control de versión:
-  pisa lo guardado.
+  pisa lo guardado. Es declarativo también para los nuevos: `hidden` es el
+  que viene (un `CANCELED` nuevo con `hidden: false` queda visible); el
+  default «CANCELED nace oculto» es de `CreateStatus` sin `hidden`.
 - `MoveIssue` sin `status_id` y con estado `UNSPECIFIED` (o desconocido) →
   `INVALID_ARGUMENT`; un `status_id` de otro proyecto también. Un valor de
   enum desconocido en el filtro de `ListIssues` también.

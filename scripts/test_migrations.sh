@@ -100,7 +100,9 @@ must_fail "límite WIP negativo" "UPDATE issues.statuses SET wip_limit = -1"
 sql "UPDATE issues.issues SET discard_reason = 'duplicado', discarded_by = 'u1', discarded_at = now()
   WHERE number = 4 AND project_id = '00000000-0000-4000-8000-0000000000a1'"
 sql "INSERT INTO issues.issue_events (id, issue_id, actor_uid, kind, data)
-  SELECT gen_random_uuid(), id, 'u1', 'discarded', '{}'::jsonb FROM issues.issues
+  SELECT gen_random_uuid(), id, 'u1', 'discarded',
+         '{\"from_id\":\"x\",\"from_name\":\"Por hacer\",\"from_category\":\"todo\",\"to_id\":\"y\",\"to_name\":\"Descartado\",\"to_category\":\"canceled\",\"reason\":\"duplicado\"}'::jsonb
+    FROM issues.issues
    WHERE number = 4 AND project_id = '00000000-0000-4000-8000-0000000000a1'"
 echo "ok   motivo completo en un CANCELED y evento 'discarded'"
 
@@ -109,6 +111,7 @@ check "down: sin columnas nuevas" "0" "SELECT count(*) FROM information_schema.c
   WHERE table_schema = 'issues' AND ((table_name = 'issues' AND column_name LIKE 'discard%')
      OR (table_name = 'statuses' AND column_name IN ('color', 'wip_limit', 'hidden')))"
 check "down: sin eventos discarded" "0" "SELECT count(*) FROM issues.issue_events WHERE kind IN ('discarded', 'restored')"
+check "down: el descarte queda como status_changed" "Descartado" "SELECT data->>'to_name' FROM issues.issue_events WHERE kind = 'status_changed' AND data->>'reason' = 'duplicado'"
 check "down: el issue sigue descartado" "canceled" "SELECT state FROM issues.issues WHERE number = 4 AND project_id = '00000000-0000-4000-8000-0000000000a1'"
 
 apply 000004_discard_search_status_settings.up

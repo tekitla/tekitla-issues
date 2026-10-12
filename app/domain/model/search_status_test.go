@@ -38,6 +38,10 @@ func TestParseIssueSearch(t *testing.T) {
 	if _, err := model.ParseIssueSearch(strings.Repeat("a", 201), "TK"); !domainerrors.IsValidation(err) {
 		t.Errorf("201 runas: expected ValidationError, got %v", err)
 	}
+	// Los espacios de los extremos no cuentan.
+	if got, err := model.ParseIssueSearch(strings.Repeat(" ", 250)+"login"+strings.Repeat(" ", 250), "TK"); err != nil || got.Text != "login" {
+		t.Errorf("con espacios: got %+v, %v", got, err)
+	}
 }
 
 func TestStatusDefaults(t *testing.T) {

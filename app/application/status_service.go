@@ -136,9 +136,8 @@ func (s *StatusService) UpdateStatus(ctx context.Context, ownerUID string, in Up
 			return nil, domainerrors.ValidationError("after_status_id must be another status", map[string]any{"field": "after_status_id"})
 		}
 	}
-	if in.Color != nil && *in.Color != model.LabelColorUnspecified && !in.Color.IsValid() {
-		return nil, domainerrors.ValidationError("invalid color", map[string]any{"field": "color", "value": int(*in.Color)})
-	}
+	// El color se valida en el repo con la categoría del estado
+	// (model.ResolveStatusColor).
 	if in.WIPLimit != nil {
 		if err := model.ValidateWIPLimit(*in.WIPLimit); err != nil {
 			return nil, err

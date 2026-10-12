@@ -44,15 +44,15 @@ type IssueSearch struct {
 }
 
 // ParseIssueSearch interpreta el query de ListIssues para el proyecto de
-// clave projectKey. Más de IssueSearchMaxLen runas es ValidationError; vacío
-// o solo espacios, sin búsqueda.
+// clave projectKey. Vacío o solo espacios: sin búsqueda; más de
+// IssueSearchMaxLen runas (sin los espacios de los extremos), ValidationError.
 func ParseIssueSearch(raw, projectKey string) (IssueSearch, error) {
-	if utf8.RuneCountInString(raw) > IssueSearchMaxLen {
-		return IssueSearch{}, domainerrors.ValidationError("query is too long", map[string]any{"field": "query", "max_len": IssueSearchMaxLen})
-	}
 	text := strings.TrimSpace(raw)
 	if text == "" {
 		return IssueSearch{}, nil
+	}
+	if utf8.RuneCountInString(text) > IssueSearchMaxLen {
+		return IssueSearch{}, domainerrors.ValidationError("query is too long", map[string]any{"field": "query", "max_len": IssueSearchMaxLen})
 	}
 	digits := text
 	if key, num, ok := strings.Cut(text, "-"); ok && projectKey != "" && strings.EqualFold(key, projectKey) {

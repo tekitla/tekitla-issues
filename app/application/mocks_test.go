@@ -73,8 +73,8 @@ type mockIssueRepo struct {
 	updateFn      func(ctx context.Context, projectID string, number int32, patch model.IssuePatch, actorUID string) (*model.Issue, error)
 	addCommentFn  func(ctx context.Context, projectID string, number int32, c *model.Comment) (*model.Comment, error)
 	listEventsFn  func(ctx context.Context, projectID string, number int32, page port.PageFilter) (*port.EventPage, error)
-	discardFn     func(ctx context.Context, projectID string, number int32, target *model.Status, reason, actorUID string) (*model.Issue, error)
-	restoreFn     func(ctx context.Context, projectID string, number int32, target *model.Status, actorUID string) (*model.Issue, error)
+	discardFn     func(ctx context.Context, projectID string, number int32, statusID, reason, actorUID string) (*model.Issue, error)
+	restoreFn     func(ctx context.Context, projectID string, number int32, actorUID string) (*model.Issue, error)
 }
 
 var _ port.IssueRepository = (*mockIssueRepo)(nil)
@@ -121,18 +121,18 @@ func (m *mockIssueRepo) AddComment(ctx context.Context, projectID string, number
 	return m.addCommentFn(ctx, projectID, number, c)
 }
 
-func (m *mockIssueRepo) Discard(ctx context.Context, projectID string, number int32, target *model.Status, reason, actorUID string) (*model.Issue, error) {
+func (m *mockIssueRepo) Discard(ctx context.Context, projectID string, number int32, statusID, reason, actorUID string) (*model.Issue, error) {
 	if m.discardFn == nil {
 		return nil, nil
 	}
-	return m.discardFn(ctx, projectID, number, target, reason, actorUID)
+	return m.discardFn(ctx, projectID, number, statusID, reason, actorUID)
 }
 
-func (m *mockIssueRepo) Restore(ctx context.Context, projectID string, number int32, target *model.Status, actorUID string) (*model.Issue, error) {
+func (m *mockIssueRepo) Restore(ctx context.Context, projectID string, number int32, actorUID string) (*model.Issue, error) {
 	if m.restoreFn == nil {
 		return nil, nil
 	}
-	return m.restoreFn(ctx, projectID, number, target, actorUID)
+	return m.restoreFn(ctx, projectID, number, actorUID)
 }
 
 func (m *mockIssueRepo) ListEvents(ctx context.Context, projectID string, number int32, page port.PageFilter) (*port.EventPage, error) {

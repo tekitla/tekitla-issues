@@ -44,9 +44,11 @@ func (r *StatusRepository) BatchUpdate(ctx context.Context, projectID string, sp
 		finalByID := make(map[string]*model.Status, len(plan.Final))
 		rank := ""
 		for _, st := range plan.Final {
-			if rank, err = model.RankAfter(rank); err != nil {
+			next, err := model.RankAfter(rank)
+			if err != nil {
 				return fmt.Errorf("rank after %q: %v", rank, err)
 			}
+			rank = next
 			st.ProjectID, st.Rank = projectID, rank
 			finalByID[st.ID] = st
 		}

@@ -17,20 +17,16 @@ import (
 
 // Discard pasa el issue a target (CANCELED) conservando su rank y guarda el
 // motivo.
-func (r *IssueRepository) Discard(ctx context.Context, projectID string, number int32, target *model.Status, reason, actorUID string) (*model.Issue, error) {
+func (r *IssueRepository) Discard(ctx context.Context, projectID string, number int32, statusID, reason, actorUID string) (*model.Issue, error) {
 	details := map[string]any{"project_id": projectID, "number": number}
 	var out *model.Issue
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		cur, from, to, err := lockForStatusChange(tx, projectID, number, target)
+		cur, from, to, err := lockForStatusChange(tx, projectID, number, statusID, model.IssueStateCanceled)
 		if err != nil {
 			return err
 		}
 		if cur.State == model.IssueStateCanceled {
 			return domainerrors.FailedPreconditionError("issue is already discarded", details).WithReason("ISSUE_ALREADY_DISCARDED")
-		}
-		if to.Category != model.IssueStateCanceled {
-			// El service eligió un estado CANCELED y la categoría no cambia.
-			return fmt.Errorf("discard target %s is %s", to.ID, to.Category)
 		}
 		now := dbNow()
 		if err := tx.Model(&issueRow{}).Where("id = ?", cur.ID).Updates(map[string]any{
@@ -56,11 +52,11 @@ func (r *IssueRepository) Discard(ctx context.Context, projectID string, number 
 
 // Restore pasa el issue a target (TODO), al final de esa columna, y borra el
 // motivo del descarte.
-func (r *IssueRepository) Restore(ctx context.Context, projectID string, number int32, target *model.Status, actorUID string) (*model.Issue, error) {
+func (r *IssueRepository) Restore(ctx context.Context, projectID string, number int32, actorUID string) (*model.Issue, error) {
 	details := map[string]any{"project_id": projectID, "number": number}
 	var out *model.Issue
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		cur, from, to, err := lockForStatusChange(tx, projectID, number, target)
+		cur, from, to, err := lockForStatusChange(tx, projectID, number, "", model.IssueStateTodo)
 		if err != nil {
 			return err
 		}
@@ -91,21 +87,45 @@ func (r *IssueRepository) Restore(ctx context.Context, projectID string, number 
 	return out, nil
 }
 
-// lockForStatusChange toma el lock del proyecto y del issue, y relee el
-// estado actual del issue y el destino (pudo borrarse: STALE_ORDER).
-func lockForStatusChange(tx *gorm.DB, projectID string, number int32, target *model.Status) (cur *model.Issue, from, to *model.Status, err error) {
+// lockForStatusChange toma el lock del proyecto y del issue, y lee el estado
+// actual del issue y el destino con el lock tomado: targetID, que tiene que
+// ser de category (pudo borrarse: STALE_ORDER), o "" = el primero de
+// category por rank.
+func lockForStatusChange(tx *gorm.DB, projectID string, number int32, targetID string, category model.IssueState) (cur *model.Issue, from, to *model.Status, err error) {
 	if err = lockProject(tx, projectID); err != nil {
 		return nil, nil, nil, err
 	}
 	if cur, err = lockIssue(tx, projectID, number); err != nil {
 		return nil, nil, nil, err
 	}
-	toRow, err := getStatusRow(tx, projectID, target.ID)
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil, nil, statusGone(target.ID)
-	}
-	if err != nil {
-		return nil, nil, nil, err
+	var toRow *statusRow
+	if targetID == "" {
+		rows, err := listStatusRows(tx, projectID)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		for i := range rows {
+			if model.IssueState(rows[i].Category) == category {
+				toRow = &rows[i]
+				break
+			}
+		}
+		if toRow == nil {
+			// Ninguna escritura deja una categoría vacía: problema de datos.
+			return nil, nil, nil, fmt.Errorf("project %s has no %s status", projectID, category)
+		}
+	} else {
+		toRow, err = getStatusRow(tx, projectID, targetID)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil, nil, statusGone(targetID)
+		}
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if model.IssueState(toRow.Category) != category {
+			// El service validó la categoría y la categoría no cambia.
+			return nil, nil, nil, fmt.Errorf("status %s is %s, want %s", toRow.ID, toRow.Category, category)
+		}
 	}
 	fromRow, err := getStatusRow(tx, projectID, cur.StatusID)
 	if err != nil {

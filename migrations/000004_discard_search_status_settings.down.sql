@@ -1,7 +1,8 @@
 -- Revierte 000004. Pierde el motivo de los descartes, el color, el límite
 -- WIP y la visibilidad de los estados; los issues descartados siguen en su
--- estado CANCELED. Los eventos 'discarded' y 'restored' se borran (el CHECK
--- de 000003 no los acepta): el historial pierde esas entradas.
+-- estado CANCELED. Los eventos 'discarded' y 'restored' pasan a
+-- 'status_changed' (el CHECK de 000003 no los acepta): su data ya tiene los
+-- campos de un cambio de estado, así el historial no pierde entradas.
 
 ALTER TABLE issues.statuses
     DROP CONSTRAINT IF EXISTS statuses_wip_limit_chk,
@@ -14,7 +15,7 @@ DROP INDEX IF EXISTS issues.issues_project_priority_rank_idx;
 DROP INDEX IF EXISTS issues.issues_project_updated_rank_idx;
 DROP FUNCTION IF EXISTS issues.search_fold(TEXT);
 
-DELETE FROM issues.issue_events WHERE kind IN ('discarded', 'restored');
+UPDATE issues.issue_events SET kind = 'status_changed' WHERE kind IN ('discarded', 'restored');
 ALTER TABLE issues.issue_events DROP CONSTRAINT issue_events_kind_chk;
 ALTER TABLE issues.issue_events ADD CONSTRAINT issue_events_kind_chk CHECK (kind IN ('created',
     'status_changed', 'title_changed', 'description_changed', 'priority_changed', 'labels_changed',

@@ -2,6 +2,7 @@ package application_test
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"testing"
 
@@ -12,7 +13,8 @@ import (
 )
 
 // Tests de la rebanada 3a: MoveIssue con estados y orden, UpdateIssue,
-// comentarios, historial, StatusService y LabelService.
+// comentarios, historial, StatusService y LabelService; y los estados del
+// issue 013 (color, WIP, visibilidad y BatchUpdateStatuses).
 
 const (
 	labelFront = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
@@ -425,5 +427,105 @@ func TestUpdateLabel(t *testing.T) {
 	}
 	if _, err := svc.UpdateLabel(context.Background(), owner, validID, "nope", ptr("x"), nil); !domainerrors.IsValidation(err) {
 		t.Errorf("bad label_id: expected ValidationError, got %v", err)
+	}
+}
+
+// --- 013: estados ---
+
+func TestCreateStatus_Defaults(t *testing.T) {
+	var got *model.Status
+	repo := &mockStatusRepo{createFn: func(_ context.Context, s *model.Status, _ string) (*model.Status, error) {
+		got = s
+		return s, nil
+	}}
+	svc := application.NewStatusService(personalWorkspaces(), ownedProjects(), repo)
+	if _, err := svc.CreateStatus(context.Background(), owner, application.CreateStatusInput{ProjectID: validID, Name: "Archivo", Category: model.IssueStateCanceled}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Color != model.LabelColorDanger || !got.Hidden || got.WIPLimit != 0 {
+		t.Errorf("CANCELED: got %+v", got)
+	}
+	visible := false
+	if _, err := svc.CreateStatus(context.Background(), owner, application.CreateStatusInput{
+		ProjectID: validID, Name: "Archivo 2", Category: model.IssueStateCanceled, Hidden: &visible, Color: model.LabelColorAccent, WIPLimit: 4,
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Color != model.LabelColorAccent || got.Hidden || got.WIPLimit != 4 {
+		t.Errorf("explícito: got %+v", got)
+	}
+	for name, in := range map[string]application.CreateStatusInput{
+		"wip negativo":   {Name: "X", Category: model.IssueStateTodo, WIPLimit: -2},
+		"color inválido": {Name: "X", Category: model.IssueStateTodo, Color: 11},
+	} {
+		in.ProjectID = validID
+		if _, err := svc.CreateStatus(context.Background(), owner, in); !domainerrors.IsValidation(err) {
+			t.Errorf("%s: expected ValidationError, got %v", name, err)
+		}
+	}
+}
+
+func TestUpdateStatus_Settings(t *testing.T) {
+	var got port.StatusPatch
+	repo := &mockStatusRepo{updateFn: func(_ context.Context, _, id string, patch port.StatusPatch) (*model.Status, error) {
+		got = patch
+		return &model.Status{ID: id}, nil
+	}}
+	svc := application.NewStatusService(personalWorkspaces(), ownedProjects(), repo)
+	color, wip, hidden := model.LabelColorUnspecified, int32(5), true
+	if _, err := svc.UpdateStatus(context.Background(), owner, application.UpdateStatusInput{
+		ProjectID: validID, StatusID: stDoing.ID, Color: &color, WIPLimit: &wip, Hidden: &hidden,
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Color == nil || *got.Color != model.LabelColorUnspecified || *got.WIPLimit != 5 || !*got.Hidden || got.Name != nil {
+		t.Errorf("patch: got %+v", got)
+	}
+	// El color fuera de rango lo rechaza el repo (model.ResolveStatusColor,
+	// con la categoría del estado): ver TestStatusDefaults.
+	neg := int32(-1)
+	in := application.UpdateStatusInput{ProjectID: validID, StatusID: stDoing.ID, WIPLimit: &neg}
+	if _, err := svc.UpdateStatus(context.Background(), owner, in); !domainerrors.IsValidation(err) {
+		t.Errorf("wip negativo: expected ValidationError, got %v", err)
+	}
+}
+
+func TestBatchUpdateStatuses(t *testing.T) {
+	var gotSpecs []model.StatusSpec
+	var gotActor string
+	repo := &mockStatusRepo{batchFn: func(_ context.Context, _ string, specs []model.StatusSpec, _ []model.StatusDeletion, actor string) ([]*model.Status, error) {
+		gotSpecs, gotActor = specs, actor
+		return []*model.Status{stTodo}, nil
+	}}
+	svc := application.NewStatusService(personalWorkspaces(), ownedProjects(), repo)
+	specs := []model.StatusSpec{{ID: stTodo.ID, Name: "Backlog"}, {Name: "Nuevo", Category: model.IssueStateTodo}}
+	out, err := svc.BatchUpdateStatuses(context.Background(), owner, application.BatchUpdateStatusesInput{ProjectID: validID, Statuses: specs})
+	if err != nil || len(out) != 1 || len(gotSpecs) != 2 || gotActor != owner {
+		t.Errorf("batch: out %v specs %v actor %q err %v", out, gotSpecs, gotActor, err)
+	}
+
+	failRepo := &mockStatusRepo{batchFn: func(context.Context, string, []model.StatusSpec, []model.StatusDeletion, string) ([]*model.Status, error) {
+		t.Fatal("no debería llegar al repo")
+		return nil, nil
+	}}
+	svc = application.NewStatusService(personalWorkspaces(), ownedProjects(), failRepo)
+	for name, in := range map[string]application.BatchUpdateStatusesInput{
+		"id no UUID":         {Statuses: []model.StatusSpec{{ID: "abc", Name: "X"}}},
+		"borrado no UUID":    {Deletions: []model.StatusDeletion{{StatusID: "abc"}}},
+		"destino no UUID":    {Deletions: []model.StatusDeletion{{StatusID: stTodo.ID, MoveToStatusID: "abc"}}},
+		"borrado sin estado": {Deletions: []model.StatusDeletion{{}}},
+	} {
+		in.ProjectID = validID
+		if _, err := svc.BatchUpdateStatuses(context.Background(), owner, in); !domainerrors.IsValidation(err) {
+			t.Errorf("%s: expected ValidationError, got %v", name, err)
+		}
+	}
+
+	boom := errors.New("boom")
+	svc = application.NewStatusService(personalWorkspaces(), ownedProjects(), &mockStatusRepo{batchFn: func(context.Context, string, []model.StatusSpec, []model.StatusDeletion, string) ([]*model.Status, error) {
+		return nil, boom
+	}})
+	if _, err := svc.BatchUpdateStatuses(context.Background(), owner, application.BatchUpdateStatusesInput{ProjectID: validID}); !errors.Is(err, boom) {
+		t.Errorf("propaga el error del repo: got %v", err)
 	}
 }

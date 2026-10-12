@@ -41,9 +41,13 @@ func memMatches(it *model.Issue, f port.IssueFilter) bool {
 	return true
 }
 
-func (s memIssues) Discard(_ context.Context, projectID string, number int32, target *model.Status, reason, actor string) (*model.Issue, error) {
+func (s memIssues) Discard(_ context.Context, projectID string, number int32, statusID, reason, actor string) (*model.Issue, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	target := s.status(projectID, statusID)
+	if statusID == "" {
+		target = model.FirstStatusOf(s.projectStatuses(projectID), model.IssueStateCanceled)
+	}
 	it := s.find(projectID, number)
 	if it == nil {
 		return nil, domainerrors.NotFoundError("issue not found", nil)
@@ -58,9 +62,10 @@ func (s memIssues) Discard(_ context.Context, projectID string, number int32, ta
 	return it, nil
 }
 
-func (s memIssues) Restore(_ context.Context, projectID string, number int32, target *model.Status, actor string) (*model.Issue, error) {
+func (s memIssues) Restore(_ context.Context, projectID string, number int32, actor string) (*model.Issue, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	target := model.FirstStatusOf(s.projectStatuses(projectID), model.IssueStateTodo)
 	it := s.find(projectID, number)
 	if it == nil {
 		return nil, domainerrors.NotFoundError("issue not found", nil)
@@ -109,7 +114,7 @@ func (s memStatuses) BatchUpdate(_ context.Context, projectID string, specs []mo
 
 // --- Recorrido de 011 a 013 ---
 
-func TestIssueHandler_V040Flow(t *testing.T) {
+func TestIssueHandler_DiscardSearchStatusFlow(t *testing.T) {
 	client := newClient(t)
 	ctx := asUser(t, "u1")
 

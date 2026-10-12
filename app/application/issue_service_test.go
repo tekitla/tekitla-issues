@@ -402,3 +402,124 @@ func TestIssueService_UserWithoutWorkspaceIsNotFound(t *testing.T) {
 		t.Fatalf("expected NotFound, got %v", err)
 	}
 }
+
+// otherID es un UUID válido que no es de ningún proyecto de los tests.
+const otherID = "99999999-9999-4999-8999-999999999999"
+
+// --- 011: DiscardIssue / RestoreIssue ---
+
+func TestDiscardIssue(t *testing.T) {
+	var gotStatus, gotReason, gotActor string
+	issues := &mockIssueRepo{discardFn: func(_ context.Context, _ string, n int32, statusID, reason, actor string) (*model.Issue, error) {
+		gotStatus, gotReason, gotActor = statusID, reason, actor
+		return &model.Issue{Number: n}, nil
+	}}
+	svc := newIssueSvc(personalWorkspaces(), ownedProjects(), issues)
+	// Sin status_id: el repo elige el primero CANCELED con el lock tomado.
+	if _, err := svc.DiscardIssue(context.Background(), owner, application.DiscardIssueInput{ProjectID: validID, Number: 3, Reason: "  duplicado  "}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotStatus != "" || gotReason != "duplicado" || gotActor != owner {
+		t.Errorf("discard: status %q reason %q actor %q", gotStatus, gotReason, gotActor)
+	}
+	if _, err := svc.DiscardIssue(context.Background(), owner, application.DiscardIssueInput{ProjectID: validID, Number: 3, Reason: "x", StatusID: stCanceled.ID}); err != nil || gotStatus != stCanceled.ID {
+		t.Errorf("discard con status_id: status %q, err %v", gotStatus, err)
+	}
+}
+
+func TestDiscardIssue_Validation(t *testing.T) {
+	svc := newIssueSvc(personalWorkspaces(), ownedProjects(), failIssueRepo(t))
+	cases := map[string]application.DiscardIssueInput{
+		"sin motivo":            {Number: 1, Reason: "   "},
+		"número inválido":       {Number: 0, Reason: "x"},
+		"status_id no UUID":     {Number: 1, Reason: "x", StatusID: "abc"},
+		"status_id ajeno":       {Number: 1, Reason: "x", StatusID: otherID},
+		"status_id no CANCELED": {Number: 1, Reason: "x", StatusID: stDone.ID},
+	}
+	for name, in := range cases {
+		in.ProjectID = validID
+		if _, err := svc.DiscardIssue(context.Background(), owner, in); !domainerrors.IsValidation(err) {
+			t.Errorf("%s: expected ValidationError, got %v", name, err)
+		}
+	}
+}
+
+func TestDiscardIssue_PropagatesAlreadyDiscarded(t *testing.T) {
+	issues := &mockIssueRepo{discardFn: func(context.Context, string, int32, string, string, string) (*model.Issue, error) {
+		return nil, domainerrors.FailedPreconditionError("issue is already discarded", nil).WithReason("ISSUE_ALREADY_DISCARDED")
+	}}
+	_, err := newIssueSvc(personalWorkspaces(), ownedProjects(), issues).DiscardIssue(context.Background(), owner, application.DiscardIssueInput{
+		ProjectID: validID, Number: 1, Reason: "x", StatusID: stCanceled.ID,
+	})
+	if !domainerrors.IsFailedPrecondition(err) {
+		t.Errorf("expected FailedPrecondition, got %v", err)
+	}
+}
+
+func TestRestoreIssue(t *testing.T) {
+	var gotActor string
+	issues := &mockIssueRepo{restoreFn: func(_ context.Context, _ string, n int32, actor string) (*model.Issue, error) {
+		gotActor = actor
+		return &model.Issue{Number: n}, nil
+	}}
+	svc := newIssueSvc(personalWorkspaces(), ownedProjects(), issues)
+	if _, err := svc.RestoreIssue(context.Background(), owner, validID, 2); err != nil || gotActor != owner {
+		t.Errorf("restore: actor %q, err %v", gotActor, err)
+	}
+	if _, err := svc.RestoreIssue(context.Background(), owner, validID, -1); !domainerrors.IsValidation(err) {
+		t.Errorf("número inválido: expected ValidationError, got %v", err)
+	}
+	if _, err := svc.RestoreIssue(context.Background(), "u-ajeno", validID, 2); !domainerrors.IsNotFound(err) {
+		t.Errorf("proyecto ajeno: expected NotFound, got %v", err)
+	}
+}
+
+// --- 012: ListIssues ---
+
+func TestListIssues_Filters(t *testing.T) {
+	var got port.IssueFilter
+	issues := &mockIssueRepo{listFn: func(_ context.Context, f port.IssueFilter) (*port.IssuePage, error) {
+		got = f
+		return &port.IssuePage{}, nil
+	}}
+	labels := &mockLabelRepo{listFn: func(context.Context, string) ([]*model.Label, error) {
+		return []*model.Label{{ID: "l1"}, {ID: "l2"}}, nil
+	}}
+	svc := application.NewIssueService(personalWorkspaces(), ownedProjects(), issues, projectStatuses(), labels)
+	_, err := svc.ListIssues(context.Background(), owner, application.ListIssuesInput{
+		ProjectID:  validID,
+		States:     []model.IssueState{model.IssueStateTodo, model.IssueStateInProgress, model.IssueStateTodo},
+		StatusIDs:  []string{stDone.ID},
+		Priorities: []model.Priority{model.PriorityHigh},
+		LabelIDs:   []string{"l2", "l2"},
+		Query:      " tk-4 ",
+		Order:      model.IssueOrderPriorityDesc,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !slices.Equal(got.States, []model.IssueState{model.IssueStateTodo, model.IssueStateInProgress}) ||
+		!slices.Equal(got.StatusIDs, []string{stDone.ID}) || !slices.Equal(got.LabelIDs, []string{"l2"}) ||
+		got.Search != (model.IssueSearch{Text: "tk-4", Number: 4}) || got.Order != model.IssueOrderPriorityDesc ||
+		got.Limit != application.DefaultPageLimit {
+		t.Errorf("filter: got %+v", got)
+	}
+}
+
+func TestListIssues_FilterValidation(t *testing.T) {
+	svc := newIssueSvc(personalWorkspaces(), ownedProjects(), failIssueRepo(t))
+	cases := map[string]application.ListIssuesInput{
+		"state + states":         {State: model.IssueStateTodo, States: []model.IssueState{model.IssueStateDone}},
+		"states con unspecified": {States: []model.IssueState{model.IssueStateUnspecified}},
+		"prioridad unspecified":  {Priorities: []model.Priority{model.PriorityUnspecified}},
+		"status de otro":         {StatusIDs: []string{otherID}},
+		"etiqueta de otro":       {LabelIDs: []string{"l9"}},
+		"orden desconocido":      {Order: "random"},
+	}
+	for name, in := range cases {
+		in.ProjectID = validID
+		if _, err := svc.ListIssues(context.Background(), owner, in); !domainerrors.IsValidation(err) {
+			t.Errorf("%s: expected ValidationError, got %v", name, err)
+		}
+	}
+}
