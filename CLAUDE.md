@@ -6,12 +6,14 @@ Proyectos e issues de Tekitla (issue 002): proyectos dentro de un espacio de
 trabajo (hoy, el personal de cada usuario) y sus issues, con estados
 configurables por proyecto (cada uno de una categoría fija: por hacer, en
 curso, hecho, descartado), orden manual por `rank`, etiquetas, comentarios e
-historial (rebanada 3a).
+historial (rebanada 3a), descartar con motivo (issue 011), búsqueda, filtros
+y orden en la lista (012) y color, límite WIP y columnas ocultas (013).
 
 - **Contrato**: `issues.v1.IssueService` de `github.com/tekitla/tekitla-protos`
   (`gen/go/issues/v1`): proyectos, issues (`ListIssues`, `GetIssue`,
-  `CreateIssue`, `MoveIssue`, `UpdateIssue`), estados, etiquetas,
-  `CreateComment` y `ListIssueEvents`. Los comentarios del `.proto` son la
+  `CreateIssue`, `MoveIssue`, `UpdateIssue`, `DiscardIssue`, `RestoreIssue`),
+  estados (con `BatchUpdateStatuses`), etiquetas, `CreateComment` y
+  `ListIssueEvents`. Los comentarios del `.proto` son la
   especificación.
 - **Quién lo llama**: solo el `tekitla-gateway` (api-gateway), que autentica y
   propaga la identidad en la metadata gRPC `x-user-id` (además `x-roles` y
@@ -71,13 +73,45 @@ Reglas de negocio no obvias:
   de rocicorp): base 62, se compara byte a byte (columna `COLLATE "C"`), entre
   dos claves siempre hay otra (`model.RankBetween`, para reordenar en la
   rebanada 3). Agregar al final da `a0`, `a1`, …, `az`, `b00`.
+- Descartar (011): «descartado» = estar en un estado `CANCELED`, con o sin
+  motivo. `DiscardIssue` lo pasa al estado `CANCELED` pedido (o al primero),
+  conserva el rank y guarda `discard_reason`, `discarded_by` y `discarded_at`
+  (las tres o ninguna, y solo en `canceled`: CHECKs de `000004`); ya
+  descartado → `FAILED_PRECONDITION` `ISSUE_ALREADY_DISCARDED`.
+  `RestoreIssue` lo pasa al primer estado `TODO`, al final de esa columna
+  (`rankAtColumnEnd`); no descartado → `ISSUE_NOT_DISCARDED`. El motivo se
+  mantiene entre estados `CANCELED` y se borra cuando el issue sale de
+  `CANCELED` por cualquier vía (`MoveIssue`, `DeleteStatus`, el batch:
+  `clearDiscard`). Eventos `discarded` (con motivo) y `restored`; descartar con
+  `MoveIssue` deja un `status_changed`.
+- Lista (012): filtros con Y entre sí y O dentro de cada lista; `state` y
+  `states` juntos, `UNSPECIFIED` en una lista o un `status_id`/`label_id` de
+  otro proyecto → `INVALID_ARGUMENT`. `query` (hasta 200 runas) busca en el
+  título sin mayúsculas ni acentos con `issues.search_fold` (SQL de `000004`,
+  `translate` + `lower`, sin extensiones) y LIKE escapado; si es un número
+  (`12`) o una clave del proyecto (`TK-12`, la key sin mayúsculas) trae
+  también ese issue (`model.ParseIssueSearch`). Orden `rank`, `updated_at
+  DESC` o `priority DESC`, siempre con `rank` de desempate. El cursor lleva
+  la huella de filtros y orden (`issueFilterFingerprint`): usarlo con otros →
+  `INVALID_ARGUMENT`.
+- Estados (013): `color` (mismo enum que las etiquetas; `UNSPECIFIED` = el
+  de la categoría, `model.DefaultStatusColor`), `wip_limit` (0 = sin límite,
+  negativo `INVALID_ARGUMENT`; pasarse no bloquea nada) y `hidden` (los
+  `CANCELED` nacen ocultos). `BatchUpdateStatuses` es declarativo: lo valida
+  `model.PlanStatusBatch` contra los estados actuales (un estado que no está
+  ni en `statuses` ni en `deletions` → `FAILED_PRECONDITION`
+  `STALE_STATUSES`) y el repo lo guarda con el lock del proyecto, con nombres
+  y ranks provisorios para no chocar con los índices únicos a mitad del
+  cambio. Ranks nuevos por posición (`a0`, `a1`, …). Sin control de versión:
+  pisa lo guardado.
 - `MoveIssue` sin `status_id` y con estado `UNSPECIFIED` (o desconocido) →
   `INVALID_ARGUMENT`; un `status_id` de otro proyecto también. Un valor de
   enum desconocido en el filtro de `ListIssues` también.
 - `CANCELED` (`canceled` en la base) es un estado más: `MoveIssue` lo acepta y
   `ListIssues` sin filtro lo incluye (el panel lo oculta).
-- Orden: proyectos por `name, id`; issues por `rank` (único por proyecto). Un cursor del orden
-  anterior (`v0.1`, por prioridad) responde `INVALID_ARGUMENT`.
+- Orden: proyectos por `name, id`; issues por `rank` (único por proyecto) por
+  default. Un cursor de `v0.1` (por prioridad) o de `v0.3` (sin huella)
+  responde `INVALID_ARGUMENT`.
 
 Microservicio Go gRPC, interno (Coolify, sin puerto publicado), Postgres en el
 schema `issues`, puerto `5000`. Generado desde la plantilla
@@ -134,8 +168,13 @@ compose, ver `cli/healthcheck.go`) y reflection fuera de prod.
   de errores del repo.
 - Handlers: un test de punta a punta con `bufconn` y repos en memoria alcanza
   (ver `issue_handler_test.go`: identidad, pertenencia y mapeo de errores).
-- No hay tests de integración contra Postgres: los repos se prueban levantando
-  `make up` y pegándole con `grpcurl` (ver "Comandos").
+- No hay tests de integración de los repos contra Postgres: se prueban
+  levantando `make up` y pegándole con `grpcurl` (ver "Comandos").
+- Migraciones: `make test-migrations` (`scripts/test_migrations.sh`) aplica
+  todas contra un Postgres 16 descartable en docker, carga datos de la versión
+  anterior antes de cada backfill, verifica el backfill y las restricciones, y
+  prueba down → up de la última. Una migración nueva suma ahí sus
+  verificaciones.
 
 ## Datos
 
@@ -150,7 +189,8 @@ compose, ver `cli/healthcheck.go`) y reflection fuera de prod.
   espacio, único `workspace_id, key`; `next_issue_number`), `issues.issues` (FK
   al proyecto y a su estado, únicos `project_id, number` y `project_id, rank`;
   `state` texto `todo|in_progress|done|canceled` y `priority` 1..4, ambos con
-  `CHECK`; `rank` `TEXT COLLATE "C"`), `issues.statuses`, `issues.labels`,
+  `CHECK`; `rank` `TEXT COLLATE "C"`; `discard_*` del descarte),
+  `issues.statuses` (`color` 1..7, `wip_limit` ≥ 0, `hidden`), `issues.labels`,
   `issues.issue_labels`, `issues.comments` e `issues.issue_events`. Timestamps
   truncados a microsegundos en el repo (`dbNow`).
 - JSONB: DTOs unexported separados del dominio + `encoding/json`.
@@ -158,7 +198,8 @@ compose, ver `cli/healthcheck.go`) y reflection fuera de prod.
   (`DATABASE_URL=... scripts/apply_migration.sh <qa|prod> <migración>`).
   `000001` crea el schema, `000002` las tablas de la rebanada 1 y `000003` las
   de la 3a con backfill (estados de cada proyecto, `status_id` de cada issue y
-  el evento «creado»). El `docker-compose.yml` local las aplica
+  el evento «creado»), y `000004` las de 011 a 013 (descarte, `search_fold`,
+  índices de los órdenes, color/WIP/visibilidad con backfill por categoría). El `docker-compose.yml` local las aplica
   solo al crear el volumen (`docker compose down -v` para empezar de cero).
 - Copiar los datos del servicio entre dos Postgres (con verificación de filas):
   `scripts/migrate_db.sh SRC_URL DST_URL` (dry-run; `--apply` para ejecutar).
@@ -171,6 +212,7 @@ make up / make down           # Postgres 16 + servicio con docker compose
 docker compose up -d --wait postgres   # solo la base, para `make run`
 make run                      # levanta el servicio (lee .env.dev)
 make test                     # go test ./... -count=1
+make test-migrations          # migraciones + backfill contra un Postgres descartable
 make lint                     # gofmt + go vet (+ golangci-lint si está)
 make build                    # bin/issues-service
 go mod tidy                   # después de tocar imports
@@ -198,8 +240,9 @@ git tag prod-v0.1.0 && git push origin prod-v0.1.0   # prod, automático salvo m
 - La imagen se publica con el tag inmutable (`qa-v0.1.0`) y uno móvil (`qa`/`prod`);
   el recurso de Coolify usa `IMAGE_TAG=qa|prod`.
 - `000003` no es compatible con el binario anterior (exige `status_id` y estados
-  por proyecto): se aplica y se despliega la imagen nueva en seguida, sin
-  tráfico de por medio. Hoy no aplica: nada está desplegado todavía.
+  por proyecto) y `000004` tampoco (estados sin DEFAULT de color, WIP y
+  visibilidad): se aplica y se despliega la imagen nueva en seguida, sin
+  tráfico de por medio.
 - Release con cambios en `migrations/`: la guarda de prod bloquea. Aplicar el
   SQL por túnel SSH (`scripts/apply_migration.sh prod <migración> --apply`) y
   lanzar el override.
@@ -211,7 +254,7 @@ git tag prod-v0.1.0 && git push origin prod-v0.1.0   # prod, automático salvo m
 
 ## Protos
 
-Repo de protos: `github.com/tekitla/tekitla-protos`, hoy en `v0.3.0`
+Repo de protos: `github.com/tekitla/tekitla-protos`, hoy en `v0.4.0`
 (`go.mod`). Paquete Go `github.com/tekitla/tekitla-protos/gen/go/issues/v1`
 (alias `issuesv1`), usado solo en `handler/`, `mapper/` y `cli/main.go`.
 

@@ -6,8 +6,10 @@
 -- categoría, sin límite WIP, y los CANCELED quedan ocultos (como nacen desde
 -- ahora). Sin BEGIN/COMMIT propios: scripts/apply_migration.sh envuelve el
 -- archivo en una transacción (y lo prueba en seco con ROLLBACK).
--- Compatible con el binario anterior: solo agrega columnas con valor y
--- amplía el CHECK de issue_events.kind.
+-- No es compatible con el binario anterior: color, wip_limit y hidden no
+-- tienen DEFAULT (el color depende de la categoría), así que el binario de
+-- v0.3 no puede crear proyectos ni estados. Se aplica y se despliega la imagen
+-- nueva en seguida, como 000003.
 
 
 -- ------------------------------------------------------------
