@@ -177,7 +177,7 @@ func (s memIssues) List(_ context.Context, f port.IssueFilter) (*port.IssuePage,
 	defer s.mu.Unlock()
 	page := &port.IssuePage{}
 	for _, it := range s.issues {
-		if it.ProjectID == f.ProjectID && (f.State == "" || it.State == f.State) {
+		if it.ProjectID == f.ProjectID && memMatches(it, f) {
 			page.Issues = append(page.Issues, it)
 		}
 	}

@@ -20,7 +20,7 @@ func TestProjectCursorRoundTrip(t *testing.T) {
 }
 
 func TestIssueCursorRoundTrip(t *testing.T) {
-	in := issueCursor{Rank: "a0V"}
+	in := issueCursor{Rank: "a0V", UpdatedMicros: 1760000000000000, Priority: 3, Filter: "abc"}
 
 	out, err := decodeIssueCursor(encodeCursor(in))
 	if err != nil {
@@ -53,7 +53,8 @@ func TestDecodeCursor_Invalid(t *testing.T) {
 		b64(`{"r":1}`),     // rank no es string
 		b64(`{"r":"~~~"}`), // rank fuera del formato
 		b64(`{"r":"a00"}`), // rank terminado en 0
-		b64(`{"r":"a0","i":"` + cursorTestID + `"}`),             // campo desconocido
+		b64(`{"r":"a0","i":"` + cursorTestID + `"}`), // campo desconocido
+		b64(`{"r":"a0"}`), // sin huella de filtros (v0.3)
 		b64(`{"p":2,"t":1,"i":"` + cursorTestID + `"}`),          // cursor del orden por prioridad (v0.1)
 		encodeCursor(projectCursor{Name: "a", ID: cursorTestID}), // cursor de otro listado
 	}

@@ -39,12 +39,30 @@ func NewIssueService(
 	}
 }
 
-// ListIssuesInput son los datos que acepta ListIssues. State vacío = todos.
+// ListIssuesInput son los datos que acepta ListIssues: filtros (Y entre sí,
+// O dentro de cada lista; vacío = no filtra), búsqueda y orden. State es una
+// sola categoría (clientes de v0.3); no se puede mandar con States.
 type ListIssuesInput struct {
+	ProjectID  string
+	State      model.IssueState
+	States     []model.IssueState
+	StatusIDs  []string
+	Priorities []model.Priority
+	LabelIDs   []string
+	Query      string
+	// Order vacío = rank.
+	Order  model.IssueOrder
+	Cursor string
+	Limit  int32
+}
+
+// DiscardIssueInput son los datos que acepta DiscardIssue. StatusID vacío =
+// el primer estado CANCELED del proyecto.
+type DiscardIssueInput struct {
 	ProjectID string
-	State     model.IssueState
-	Cursor    string
-	Limit     int32
+	Number    int32
+	Reason    string
+	StatusID  string
 }
 
 // CreateIssueInput son los datos que acepta CreateIssue.
@@ -78,21 +96,66 @@ type UpdateIssueInput struct {
 	LabelIDs *[]string
 }
 
-// ListIssues devuelve una página de issues del proyecto en su orden manual
-// (rank ascendente).
+// ListIssues devuelve una página de issues del proyecto con la búsqueda,
+// los filtros y el orden pedidos (sin ellos: todos, por rank).
 func (s *IssueService) ListIssues(ctx context.Context, ownerUID string, in ListIssuesInput) (*port.IssuePage, error) {
-	if _, err := s.guard.ensure(ctx, ownerUID, in.ProjectID); err != nil {
+	project, _, err := s.guard.project(ctx, ownerUID, in.ProjectID)
+	if err != nil {
 		return nil, err
 	}
-	if in.State != model.IssueStateUnspecified && !in.State.IsValid() {
-		return nil, invalidState(in.State)
+	filter := port.IssueFilter{ProjectID: in.ProjectID, Order: in.Order, Cursor: in.Cursor, Limit: normalizeLimit(in.Limit)}
+
+	states := in.States
+	if in.State != model.IssueStateUnspecified {
+		if len(in.States) > 0 {
+			return nil, domainerrors.ValidationError("state and states cannot be used together", map[string]any{"field": "states"})
+		}
+		states = []model.IssueState{in.State}
 	}
-	return s.issues.List(ctx, port.IssueFilter{
-		ProjectID: in.ProjectID,
-		State:     in.State,
-		Cursor:    in.Cursor,
-		Limit:     normalizeLimit(in.Limit),
-	})
+	for _, st := range unique(states) {
+		if !st.IsValid() {
+			return nil, domainerrors.ValidationError("invalid state", map[string]any{"field": "states", "value": string(st)})
+		}
+		filter.States = append(filter.States, st)
+	}
+	for _, p := range unique(in.Priorities) {
+		if !p.IsValid() {
+			return nil, domainerrors.ValidationError("invalid priority", map[string]any{"field": "priorities", "value": int(p)})
+		}
+		filter.Priorities = append(filter.Priorities, p)
+	}
+	if filter.Order == model.IssueOrderUnspecified {
+		filter.Order = model.IssueOrderRank
+	}
+	if !filter.Order.IsValid() {
+		return nil, domainerrors.ValidationError("invalid order", map[string]any{"field": "order_by", "value": string(in.Order)})
+	}
+	if filter.Search, err = model.ParseIssueSearch(in.Query, project.Key); err != nil {
+		return nil, err
+	}
+	if len(in.StatusIDs) > 0 {
+		statuses, err := s.statuses.List(ctx, in.ProjectID)
+		if err != nil {
+			return nil, err
+		}
+		if filter.StatusIDs, err = projectIDs("status_ids", unique(in.StatusIDs), statusIDSet(statuses)); err != nil {
+			return nil, err
+		}
+	}
+	if len(in.LabelIDs) > 0 {
+		labels, err := s.labels.List(ctx, in.ProjectID)
+		if err != nil {
+			return nil, err
+		}
+		known := make(map[string]bool, len(labels))
+		for _, l := range labels {
+			known[l.ID] = true
+		}
+		if filter.LabelIDs, err = projectIDs("label_ids", unique(in.LabelIDs), known); err != nil {
+			return nil, err
+		}
+	}
+	return s.issues.List(ctx, filter)
 }
 
 // GetIssue devuelve un issue por su número dentro del proyecto.
@@ -198,6 +261,71 @@ func (s *IssueService) MoveIssue(ctx context.Context, ownerUID string, in MoveIs
 		}
 	}
 	return s.issues.Move(ctx, in.ProjectID, in.Number, target, in.Place, ownerUID)
+}
+
+// DiscardIssue descarta un issue con un motivo: lo pasa a un estado CANCELED
+// (el pedido o el primero) conservando su lugar.
+func (s *IssueService) DiscardIssue(ctx context.Context, ownerUID string, in DiscardIssueInput) (*model.Issue, error) {
+	if _, err := s.guard.ensure(ctx, ownerUID, in.ProjectID); err != nil {
+		return nil, err
+	}
+	if err := validateIssueNumber(in.Number); err != nil {
+		return nil, err
+	}
+	reason, err := model.NormalizeDiscardReason(in.Reason)
+	if err != nil {
+		return nil, err
+	}
+	var target *model.Status
+	if in.StatusID != "" {
+		if err := validateUUID("status_id", in.StatusID); err != nil {
+			return nil, err
+		}
+		status, err := s.statuses.Get(ctx, in.ProjectID, in.StatusID)
+		if domainerrors.IsNotFound(err) {
+			return nil, domainerrors.ValidationError("status is not part of the project", map[string]any{"field": "status_id", "value": in.StatusID})
+		}
+		if err != nil {
+			return nil, err
+		}
+		if status.Category != model.IssueStateCanceled {
+			return nil, domainerrors.ValidationError("status is not a canceled status", map[string]any{"field": "status_id", "value": in.StatusID})
+		}
+		target = status
+	} else if target, err = s.firstStatusOf(ctx, in.ProjectID, model.IssueStateCanceled); err != nil {
+		return nil, err
+	}
+	return s.issues.Discard(ctx, in.ProjectID, in.Number, target, reason, ownerUID)
+}
+
+// RestoreIssue restaura un issue descartado: lo pasa al primer estado «por
+// hacer», al final de esa columna.
+func (s *IssueService) RestoreIssue(ctx context.Context, ownerUID, projectID string, number int32) (*model.Issue, error) {
+	if _, err := s.guard.ensure(ctx, ownerUID, projectID); err != nil {
+		return nil, err
+	}
+	if err := validateIssueNumber(number); err != nil {
+		return nil, err
+	}
+	target, err := s.firstStatusOf(ctx, projectID, model.IssueStateTodo)
+	if err != nil {
+		return nil, err
+	}
+	return s.issues.Restore(ctx, projectID, number, target, ownerUID)
+}
+
+// firstStatusOf devuelve el primer estado de la categoría. Todo proyecto
+// tiene al menos uno por categoría: si falta, es un problema de datos.
+func (s *IssueService) firstStatusOf(ctx context.Context, projectID string, category model.IssueState) (*model.Status, error) {
+	statuses, err := s.statuses.List(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	st := model.FirstStatusOf(statuses, category)
+	if st == nil {
+		return nil, domainerrors.InternalError("project has no status for the category", map[string]any{"project_id": projectID, "state": string(category)})
+	}
+	return st, nil
 }
 
 // UpdateIssue edita título, descripción, prioridad o etiquetas de un issue.
@@ -331,6 +459,38 @@ func validatePlacement(number int32, place port.Placement) error {
 		return domainerrors.ValidationError("after_number and before_number must differ", map[string]any{"field": "before_number"})
 	}
 	return nil
+}
+
+// unique quita repetidos conservando el orden.
+func unique[T comparable](values []T) []T {
+	out := make([]T, 0, len(values))
+	seen := make(map[T]bool, len(values))
+	for _, v := range values {
+		if !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// projectIDs verifica que cada id esté en known (los del proyecto); uno que
+// no está es ValidationError sobre field.
+func projectIDs(field string, ids []string, known map[string]bool) ([]string, error) {
+	for _, id := range ids {
+		if !known[id] {
+			return nil, domainerrors.ValidationError("id is not part of the project", map[string]any{"field": field, "value": id})
+		}
+	}
+	return ids, nil
+}
+
+func statusIDSet(statuses []*model.Status) map[string]bool {
+	set := make(map[string]bool, len(statuses))
+	for _, st := range statuses {
+		set[st.ID] = true
+	}
+	return set
 }
 
 func statusByID(statuses []*model.Status, id string) *model.Status {

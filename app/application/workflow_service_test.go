@@ -325,8 +325,8 @@ func TestCreateStatus_Validation(t *testing.T) {
 func TestUpdateStatus(t *testing.T) {
 	var gotName, gotAfter *string
 	repo := &mockStatusRepo{
-		updateFn: func(_ context.Context, _, id string, name, afterID *string) (*model.Status, error) {
-			gotName, gotAfter = name, afterID
+		updateFn: func(_ context.Context, _, id string, patch port.StatusPatch) (*model.Status, error) {
+			gotName, gotAfter = patch.Name, patch.AfterID
 			return &model.Status{ID: id}, nil
 		},
 		getFn: func(_ context.Context, _, id string) (*model.Status, error) {

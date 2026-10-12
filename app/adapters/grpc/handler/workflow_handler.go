@@ -12,8 +12,9 @@ import (
 	"github.com/tekitla/tekitla-issues/app/domain/port"
 )
 
-// RPCs de la rebanada 3a: edición de issues, estados, etiquetas, comentarios
-// e historial. Mismo patrón que issue_handler.go.
+// RPCs de la rebanada 3a (edición de issues, estados, etiquetas, comentarios
+// e historial) y de los issues 011 y 013 (descartar y restaurar, guardar los
+// estados de una vez). Mismo patrón que issue_handler.go.
 
 func (h *IssueHandler) UpdateIssue(ctx context.Context, req *issuesv1.UpdateIssueRequest) (*issuesv1.UpdateIssueResponse, error) {
 	uid, err := requireUserID(ctx)
@@ -63,6 +64,9 @@ func (h *IssueHandler) CreateStatus(ctx context.Context, req *issuesv1.CreateSta
 		Name:          req.GetName(),
 		Category:      mapper.IssueStateFromProto(req.GetCategory()),
 		AfterStatusID: req.GetAfterStatusId(),
+		Color:         mapper.LabelColorFromProto(req.GetColor()),
+		WIPLimit:      req.GetWipLimit(),
+		Hidden:        req.Hidden,
 	})
 	if err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)
@@ -75,12 +79,19 @@ func (h *IssueHandler) UpdateStatus(ctx context.Context, req *issuesv1.UpdateSta
 	if err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)
 	}
-	status, err := h.statusSvc.UpdateStatus(ctx, uid, application.UpdateStatusInput{
+	in := application.UpdateStatusInput{
 		ProjectID:     req.GetProjectId(),
 		StatusID:      req.GetStatusId(),
 		Name:          req.Name,
 		AfterStatusID: req.AfterStatusId,
-	})
+		WIPLimit:      req.WipLimit,
+		Hidden:        req.Hidden,
+	}
+	if req.Color != nil {
+		c := mapper.LabelColorFromProto(req.GetColor())
+		in.Color = &c
+	}
+	status, err := h.statusSvc.UpdateStatus(ctx, uid, in)
 	if err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)
 	}
@@ -96,6 +107,51 @@ func (h *IssueHandler) DeleteStatus(ctx context.Context, req *issuesv1.DeleteSta
 		return nil, domainerrors.MapToGRPC(err, h.logger)
 	}
 	return &issuesv1.DeleteStatusResponse{}, nil
+}
+
+func (h *IssueHandler) BatchUpdateStatuses(ctx context.Context, req *issuesv1.BatchUpdateStatusesRequest) (*issuesv1.BatchUpdateStatusesResponse, error) {
+	uid, err := requireUserID(ctx)
+	if err != nil {
+		return nil, domainerrors.MapToGRPC(err, h.logger)
+	}
+	statuses, err := h.statusSvc.BatchUpdateStatuses(ctx, uid, application.BatchUpdateStatusesInput{
+		ProjectID: req.GetProjectId(),
+		Statuses:  mapper.StatusSpecsFromProto(req.GetStatuses()),
+		Deletions: mapper.StatusDeletionsFromProto(req.GetDeletions()),
+	})
+	if err != nil {
+		return nil, domainerrors.MapToGRPC(err, h.logger)
+	}
+	return &issuesv1.BatchUpdateStatusesResponse{Statuses: mapper.StatusesToProto(statuses)}, nil
+}
+
+func (h *IssueHandler) DiscardIssue(ctx context.Context, req *issuesv1.DiscardIssueRequest) (*issuesv1.DiscardIssueResponse, error) {
+	uid, err := requireUserID(ctx)
+	if err != nil {
+		return nil, domainerrors.MapToGRPC(err, h.logger)
+	}
+	issue, err := h.issueSvc.DiscardIssue(ctx, uid, application.DiscardIssueInput{
+		ProjectID: req.GetProjectId(),
+		Number:    req.GetNumber(),
+		Reason:    req.GetReason(),
+		StatusID:  req.GetStatusId(),
+	})
+	if err != nil {
+		return nil, domainerrors.MapToGRPC(err, h.logger)
+	}
+	return &issuesv1.DiscardIssueResponse{Issue: mapper.IssueToProto(issue)}, nil
+}
+
+func (h *IssueHandler) RestoreIssue(ctx context.Context, req *issuesv1.RestoreIssueRequest) (*issuesv1.RestoreIssueResponse, error) {
+	uid, err := requireUserID(ctx)
+	if err != nil {
+		return nil, domainerrors.MapToGRPC(err, h.logger)
+	}
+	issue, err := h.issueSvc.RestoreIssue(ctx, uid, req.GetProjectId(), req.GetNumber())
+	if err != nil {
+		return nil, domainerrors.MapToGRPC(err, h.logger)
+	}
+	return &issuesv1.RestoreIssueResponse{Issue: mapper.IssueToProto(issue)}, nil
 }
 
 func (h *IssueHandler) ListLabels(ctx context.Context, req *issuesv1.ListLabelsRequest) (*issuesv1.ListLabelsResponse, error) {

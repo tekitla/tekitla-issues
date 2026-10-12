@@ -3,6 +3,7 @@ package application_test
 import (
 	"context"
 	"errors"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -351,8 +352,8 @@ func TestListIssues_PassesFilter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := port.IssueFilter{ProjectID: validID, State: model.IssueStateDone, Cursor: "abc", Limit: application.MaxPageLimit}
-	if got != want {
+	want := port.IssueFilter{ProjectID: validID, States: []model.IssueState{model.IssueStateDone}, Order: model.IssueOrderRank, Cursor: "abc", Limit: application.MaxPageLimit}
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("filter: got %+v, want %+v", got, want)
 	}
 	if !page.HasNext || page.NextCursor != "next" {
