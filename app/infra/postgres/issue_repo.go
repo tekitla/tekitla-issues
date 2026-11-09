@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -19,17 +20,22 @@ import (
 // ambos con CHECK en la migración. Rank es TEXT COLLATE "C": Postgres lo
 // ordena byte a byte, igual que model.RankBetween.
 type issueRow struct {
-	ID          string    `gorm:"primaryKey;column:id;type:uuid"`
-	ProjectID   string    `gorm:"column:project_id;type:uuid;not null"`
-	Number      int32     `gorm:"column:number;not null"`
-	Title       string    `gorm:"column:title;not null"`
-	Description string    `gorm:"column:description;not null"`
-	State       string    `gorm:"column:state;not null"`
-	Priority    int       `gorm:"column:priority;not null"`
-	Rank        string    `gorm:"column:rank;not null"`
-	StatusID    string    `gorm:"column:status_id;type:uuid;not null"`
-	CreatedAt   time.Time `gorm:"column:created_at"`
-	UpdatedAt   time.Time `gorm:"column:updated_at"`
+	ID          string `gorm:"primaryKey;column:id;type:uuid"`
+	ProjectID   string `gorm:"column:project_id;type:uuid;not null"`
+	Number      int32  `gorm:"column:number;not null"`
+	Title       string `gorm:"column:title;not null"`
+	Description string `gorm:"column:description;not null"`
+	State       string `gorm:"column:state;not null"`
+	Priority    int    `gorm:"column:priority;not null"`
+	Rank        string `gorm:"column:rank;not null"`
+	StatusID    string `gorm:"column:status_id;type:uuid;not null"`
+	// Motivo del descarte: las tres juntas o ninguna, y solo en canceled
+	// (CHECKs de 000004).
+	DiscardReason *string    `gorm:"column:discard_reason"`
+	DiscardedBy   *string    `gorm:"column:discarded_by"`
+	DiscardedAt   *time.Time `gorm:"column:discarded_at"`
+	CreatedAt     time.Time  `gorm:"column:created_at"`
+	UpdatedAt     time.Time  `gorm:"column:updated_at"`
 }
 
 func (issueRow) TableName() string { return "issues.issues" }
@@ -129,28 +135,73 @@ func (r *IssueRepository) GetByNumber(ctx context.Context, projectID string, num
 	return issue, nil
 }
 
-// List pagina por keyset (rank ASC; rank es único por proyecto), con filtro
-// opcional por estado. Pide limit+1 filas para saber si hay página siguiente.
-// Un cursor del orden anterior (prioridad) no decodifica: INVALID_ARGUMENT y
-// el cliente vuelve a la primera página.
+// List pagina por keyset con los filtros y el orden de filter (empates por
+// rank, único por proyecto). Pide limit+1 filas para saber si hay página
+// siguiente. El cursor lleva la huella de los filtros y el orden: uno de otra
+// consulta (o de una versión anterior) es INVALID_ARGUMENT y el cliente
+// vuelve a la primera página.
 func (r *IssueRepository) List(ctx context.Context, filter port.IssueFilter) (*port.IssuePage, error) {
 	limit := int(filter.Limit)
+	fp := issueFilterFingerprint(filter)
 
-	query := r.db.WithContext(ctx).Model(&issueRow{}).Where("project_id = ?", filter.ProjectID)
-	if filter.State != model.IssueStateUnspecified {
-		query = query.Where("state = ?", string(filter.State))
+	query := r.db.WithContext(ctx).Table("issues.issues AS i").Select("i.*").Where("i.project_id = ?", filter.ProjectID)
+	if len(filter.States) > 0 {
+		states := make([]string, len(filter.States))
+		for i, st := range filter.States {
+			states[i] = string(st)
+		}
+		query = query.Where("i.state IN ?", states)
+	}
+	if len(filter.StatusIDs) > 0 {
+		query = query.Where("i.status_id IN ?", filter.StatusIDs)
+	}
+	if len(filter.Priorities) > 0 {
+		priorities := make([]int, len(filter.Priorities))
+		for i, p := range filter.Priorities {
+			priorities[i] = int(p)
+		}
+		query = query.Where("i.priority IN ?", priorities)
+	}
+	if len(filter.LabelIDs) > 0 {
+		query = query.Where("EXISTS (SELECT 1 FROM issues.issue_labels il WHERE il.issue_id = i.id AND il.label_id IN ?)", filter.LabelIDs)
+	}
+	if s := filter.Search; s.Text != "" {
+		// La misma función a los dos lados: sin mayúsculas ni acentos. El texto
+		// va escapado para LIKE (el escape por defecto de Postgres es \).
+		match := "issues.search_fold(i.title) LIKE '%' || issues.search_fold(?) || '%'"
+		if s.Number > 0 {
+			query = query.Where("("+match+" OR i.number = ?)", escapeLike(s.Text), s.Number)
+		} else {
+			query = query.Where(match, escapeLike(s.Text))
+		}
 	}
 	if filter.Cursor != "" {
 		c, err := decodeIssueCursor(filter.Cursor)
-		if err != nil {
+		if err != nil || c.Filter != fp {
 			return nil, domainerrors.ValidationError("invalid cursor", map[string]any{"field": "cursor"})
 		}
-		// Orden ASC => el keyset usa "mayor que".
-		query = query.Where("rank > ?", c.Rank)
+		// Keyset: después en la columna del orden, o igual y con rank mayor.
+		switch filter.Order {
+		case model.IssueOrderUpdatedDesc:
+			at := time.UnixMicro(c.UpdatedMicros).UTC()
+			query = query.Where("(i.updated_at < ? OR (i.updated_at = ? AND i.rank > ?))", at, at, c.Rank)
+		case model.IssueOrderPriorityDesc:
+			query = query.Where("(i.priority < ? OR (i.priority = ? AND i.rank > ?))", c.Priority, c.Priority, c.Rank)
+		default:
+			query = query.Where("i.rank > ?", c.Rank)
+		}
+	}
+	switch filter.Order {
+	case model.IssueOrderUpdatedDesc:
+		query = query.Order("i.updated_at DESC").Order("i.rank ASC")
+	case model.IssueOrderPriorityDesc:
+		query = query.Order("i.priority DESC").Order("i.rank ASC")
+	default:
+		query = query.Order("i.rank ASC")
 	}
 
 	var rows []issueRow
-	if err := query.Order("rank ASC").Limit(limit + 1).Find(&rows).Error; err != nil {
+	if err := query.Limit(limit + 1).Find(&rows).Error; err != nil {
 		return nil, translateError(err, "issues", "list", map[string]any{"project_id": filter.ProjectID})
 	}
 
@@ -167,13 +218,26 @@ func (r *IssueRepository) List(ctx context.Context, filter port.IssueFilter) (*p
 	}
 	if hasNext && len(rows) > 0 {
 		last := rows[len(rows)-1]
-		page.NextCursor = encodeCursor(issueCursor{Rank: last.Rank})
+		c := issueCursor{Rank: last.Rank, Filter: fp}
+		switch filter.Order {
+		case model.IssueOrderUpdatedDesc:
+			c.UpdatedMicros = last.UpdatedAt.UnixMicro()
+		case model.IssueOrderPriorityDesc:
+			c.Priority = last.Priority
+		}
+		page.NextCursor = encodeCursor(c)
 	}
 	return page, nil
 }
 
+// likeEscaper escapa los comodines de LIKE (y el propio escape) para buscar
+// el texto literal.
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
+func escapeLike(s string) string { return likeEscaper.Replace(s) }
+
 func toIssueRow(m *model.Issue) *issueRow {
-	return &issueRow{
+	row := &issueRow{
 		ID:          m.ID,
 		ProjectID:   m.ProjectID,
 		Number:      m.Number,
@@ -186,10 +250,14 @@ func toIssueRow(m *model.Issue) *issueRow {
 		CreatedAt:   m.CreatedAt,
 		UpdatedAt:   m.UpdatedAt,
 	}
+	if d := m.Discard; d != nil {
+		row.DiscardReason, row.DiscardedBy, row.DiscardedAt = &d.Reason, &d.ActorUID, &d.DiscardedAt
+	}
+	return row
 }
 
 func fromIssueRow(r *issueRow) *model.Issue {
-	return &model.Issue{
+	issue := &model.Issue{
 		ID:          r.ID,
 		ProjectID:   r.ProjectID,
 		Number:      r.Number,
@@ -202,4 +270,8 @@ func fromIssueRow(r *issueRow) *model.Issue {
 		CreatedAt:   r.CreatedAt,
 		UpdatedAt:   r.UpdatedAt,
 	}
+	if r.DiscardReason != nil && r.DiscardedBy != nil && r.DiscardedAt != nil {
+		issue.Discard = &model.DiscardInfo{Reason: *r.DiscardReason, ActorUID: *r.DiscardedBy, DiscardedAt: *r.DiscardedAt}
+	}
+	return issue
 }

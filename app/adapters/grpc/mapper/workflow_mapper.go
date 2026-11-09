@@ -21,7 +21,35 @@ func StatusToProto(m *model.Status) *issuesv1.Status {
 		Name:      m.Name,
 		Category:  IssueStateToProto(m.Category),
 		Rank:      m.Rank,
+		Color:     LabelColorToProto(m.Color),
+		WipLimit:  m.WIPLimit,
+		Hidden:    m.Hidden,
 	}
+}
+
+// StatusSpecsFromProto convierte la lista de BatchUpdateStatuses.
+func StatusSpecsFromProto(specs []*issuesv1.StatusSpec) []model.StatusSpec {
+	out := make([]model.StatusSpec, len(specs))
+	for i, s := range specs {
+		out[i] = model.StatusSpec{
+			ID:       s.GetId(),
+			Name:     s.GetName(),
+			Category: IssueStateFromProto(s.GetCategory()),
+			Color:    LabelColorFromProto(s.GetColor()),
+			WIPLimit: s.GetWipLimit(),
+			Hidden:   s.GetHidden(),
+		}
+	}
+	return out
+}
+
+// StatusDeletionsFromProto convierte los borrados de BatchUpdateStatuses.
+func StatusDeletionsFromProto(deletions []*issuesv1.StatusDeletion) []model.StatusDeletion {
+	out := make([]model.StatusDeletion, len(deletions))
+	for i, d := range deletions {
+		out[i] = model.StatusDeletion{StatusID: d.GetStatusId(), MoveToStatusID: d.GetMoveToStatusId()}
+	}
+	return out
 }
 
 // StatusesToProto convierte un slice de Statuses.
@@ -131,6 +159,19 @@ func IssueEventToProto(m *model.IssueEvent) (*issuesv1.IssueEvent, error) {
 		out.Change = &issuesv1.IssueEvent_LabelsChanged{LabelsChanged: change}
 	case model.EventCommented:
 		out.Change = &issuesv1.IssueEvent_Commented{Commented: CommentToProto(m.Comment)}
+	case model.EventDiscarded:
+		c := m.Status
+		out.Change = &issuesv1.IssueEvent_Discarded{Discarded: &issuesv1.IssueDiscarded{
+			Reason:       m.Reason,
+			FromStatusId: c.FromID, FromStatusName: c.FromName, FromState: IssueStateToProto(c.FromCategory),
+			ToStatusId: c.ToID, ToStatusName: c.ToName,
+		}}
+	case model.EventRestored:
+		c := m.Status
+		out.Change = &issuesv1.IssueEvent_Restored{Restored: &issuesv1.IssueRestored{
+			FromStatusId: c.FromID, FromStatusName: c.FromName,
+			ToStatusId: c.ToID, ToStatusName: c.ToName,
+		}}
 	default:
 		return nil, fmt.Errorf("unknown event kind %q", m.Kind)
 	}

@@ -83,10 +83,16 @@ func (h *IssueHandler) ListIssues(ctx context.Context, req *issuesv1.ListIssuesR
 		return nil, domainerrors.MapToGRPC(err, h.logger)
 	}
 	page, err := h.issueSvc.ListIssues(ctx, uid, application.ListIssuesInput{
-		ProjectID: req.GetProjectId(),
-		State:     mapper.IssueStateFromProto(req.GetState()),
-		Cursor:    req.GetPage().GetCursor(),
-		Limit:     req.GetPage().GetLimit(),
+		ProjectID:  req.GetProjectId(),
+		State:      mapper.IssueStateFromProto(req.GetState()),
+		States:     mapper.IssueStatesFromProto(req.GetStates()),
+		StatusIDs:  req.GetStatusIds(),
+		Priorities: mapper.PrioritiesFromProto(req.GetPriorities()),
+		LabelIDs:   req.GetLabelIds(),
+		Query:      req.GetQuery(),
+		Order:      mapper.IssueOrderFromProto(req.GetOrderBy()),
+		Cursor:     req.GetPage().GetCursor(),
+		Limit:      req.GetPage().GetLimit(),
 	})
 	if err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)

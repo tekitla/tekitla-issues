@@ -73,9 +73,28 @@ type Issue struct {
 	// StatusID es el estado concreto (columna); State es su categoría.
 	StatusID string
 	// LabelIDs son las etiquetas, ordenadas por nombre de etiqueta.
-	LabelIDs  []string
+	LabelIDs []string
+	// Discard es el motivo del descarte (DiscardIssue). nil si no está
+	// descartado o si se descartó con MoveIssue. Solo en un estado CANCELED.
+	Discard   *DiscardInfo
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+// DiscardReasonMaxLen es el largo máximo del motivo de un descarte.
+const DiscardReasonMaxLen = 500
+
+// DiscardInfo es quién descartó un issue con DiscardIssue, cuándo y por qué.
+type DiscardInfo struct {
+	Reason      string
+	ActorUID    string
+	DiscardedAt time.Time
+}
+
+// NormalizeDiscardReason recorta espacios y valida que el motivo no sea
+// vacío ni exceda DiscardReasonMaxLen runas.
+func NormalizeDiscardReason(raw string) (string, error) {
+	return requiredText("reason", raw, DiscardReasonMaxLen)
 }
 
 // NormalizeIssueTitle recorta espacios y valida que el título no sea vacío ni

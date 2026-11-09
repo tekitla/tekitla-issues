@@ -56,6 +56,13 @@ type statusChangeData struct {
 	ToCategory   string `json:"to_category"`
 }
 
+// discardedData: el cambio de estado de DiscardIssue y su motivo. Restored
+// usa statusChangeData.
+type discardedData struct {
+	statusChangeData
+	Reason string `json:"reason"`
+}
+
 type titleChangeData struct {
 	From string `json:"from"`
 	To   string `json:"to"`
@@ -102,12 +109,10 @@ func insertEvent(tx *gorm.DB, issueID, actorUID string, ev *model.IssueEvent, at
 func eventData(ev *model.IssueEvent) ([]byte, error) {
 	var v any = struct{}{}
 	switch ev.Kind {
-	case model.EventStatusChanged:
-		c := ev.Status
-		v = statusChangeData{
-			FromID: c.FromID, FromName: c.FromName, FromCategory: string(c.FromCategory),
-			ToID: c.ToID, ToName: c.ToName, ToCategory: string(c.ToCategory),
-		}
+	case model.EventStatusChanged, model.EventRestored:
+		v = toStatusChangeData(ev.Status)
+	case model.EventDiscarded:
+		v = discardedData{statusChangeData: toStatusChangeData(ev.Status), Reason: ev.Reason}
 	case model.EventTitleChanged:
 		v = titleChangeData{From: ev.Title.From, To: ev.Title.To}
 	case model.EventPriorityChanged:
@@ -116,6 +121,20 @@ func eventData(ev *model.IssueEvent) ([]byte, error) {
 		v = labelsChangeData{Added: labelRefs(ev.Labels.Added), Removed: labelRefs(ev.Labels.Removed)}
 	}
 	return json.Marshal(v)
+}
+
+func toStatusChangeData(c *model.StatusChange) statusChangeData {
+	return statusChangeData{
+		FromID: c.FromID, FromName: c.FromName, FromCategory: string(c.FromCategory),
+		ToID: c.ToID, ToName: c.ToName, ToCategory: string(c.ToCategory),
+	}
+}
+
+func fromStatusChangeData(d statusChangeData) *model.StatusChange {
+	return &model.StatusChange{
+		FromID: d.FromID, FromName: d.FromName, FromCategory: model.IssueState(d.FromCategory),
+		ToID: d.ToID, ToName: d.ToName, ToCategory: model.IssueState(d.ToCategory),
+	}
 }
 
 func labelRefs(labels []*model.Label) []labelRef {
@@ -138,13 +157,14 @@ func fromEventRow(r *eventRow) (*model.IssueEvent, error) {
 	}
 	var err error
 	switch ev.Kind {
-	case model.EventStatusChanged:
+	case model.EventStatusChanged, model.EventRestored:
 		var d statusChangeData
 		err = json.Unmarshal(r.Data, &d)
-		ev.Status = &model.StatusChange{
-			FromID: d.FromID, FromName: d.FromName, FromCategory: model.IssueState(d.FromCategory),
-			ToID: d.ToID, ToName: d.ToName, ToCategory: model.IssueState(d.ToCategory),
-		}
+		ev.Status = fromStatusChangeData(d)
+	case model.EventDiscarded:
+		var d discardedData
+		err = json.Unmarshal(r.Data, &d)
+		ev.Status, ev.Reason = fromStatusChangeData(d.statusChangeData), d.Reason
 	case model.EventTitleChanged:
 		var d titleChangeData
 		err = json.Unmarshal(r.Data, &d)
@@ -280,9 +300,13 @@ func (r *IssueRepository) Move(ctx context.Context, projectID string, number int
 			}
 		}
 		now := dbNow()
-		if err := tx.Model(&issueRow{}).Where("id = ?", cur.ID).Updates(map[string]any{
-			"status_id": target.ID, "state": string(target.Category), "rank": rank, "updated_at": now,
-		}).Error; err != nil {
+		updates := map[string]any{"status_id": target.ID, "state": string(target.Category), "rank": rank, "updated_at": now}
+		if target.Category != model.IssueStateCanceled {
+			// Sale de CANCELED (o nunca estuvo): sin motivo de descarte.
+			clearDiscard(updates)
+			cur.Discard = nil
+		}
+		if err := tx.Model(&issueRow{}).Where("id = ?", cur.ID).Updates(updates).Error; err != nil {
 			return err
 		}
 		if statusChanged {

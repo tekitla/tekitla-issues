@@ -77,7 +77,10 @@ func (s *ProjectService) CreateProject(ctx context.Context, ownerUID string, in 
 	}
 	statuses := make([]*model.Status, len(model.DefaultStatuses))
 	for i, d := range model.DefaultStatuses {
-		statuses[i] = &model.Status{ID: uuid.NewString(), Name: d.Name, Category: d.Category}
+		statuses[i] = &model.Status{
+			ID: uuid.NewString(), Name: d.Name, Category: d.Category,
+			Color: model.DefaultStatusColor(d.Category), Hidden: model.DefaultStatusHidden(d.Category),
+		}
 	}
 	created, err := s.repo.Create(ctx, project, statuses)
 	if err != nil {

@@ -34,17 +34,25 @@ const (
 	EventPriorityChanged    EventKind = "priority_changed"
 	EventLabelsChanged      EventKind = "labels_changed"
 	EventCommented          EventKind = "commented"
+	// EventDiscarded: DiscardIssue (con motivo). Descartar con MoveIssue es un
+	// EventStatusChanged.
+	EventDiscarded EventKind = "discarded"
+	// EventRestored: RestoreIssue.
+	EventRestored EventKind = "restored"
 )
 
 // IssueEvent es un cambio en un issue, para su historial. Según Kind, viene
 // lleno uno de Status, Title, Priority, Labels o Comment (Created y
-// DescriptionChanged no tienen detalle).
+// DescriptionChanged no tienen detalle). Discarded y Restored usan Status
+// (de dónde a dónde), y Discarded además Reason.
 type IssueEvent struct {
-	ID        string
-	IssueID   string
-	ActorUID  string
-	Kind      EventKind
-	Status    *StatusChange
+	ID       string
+	IssueID  string
+	ActorUID string
+	Kind     EventKind
+	Status   *StatusChange
+	// Reason es el motivo, solo en EventDiscarded.
+	Reason    string
 	Title     *TitleChange
 	Priority  *PriorityChange
 	Labels    *LabelsChange

@@ -74,6 +74,9 @@ func (s memIssues) Move(_ context.Context, projectID string, number int32, targe
 		from := s.status(projectID, it.StatusID)
 		s.addEvent(it.ID, actor, &model.IssueEvent{Kind: model.EventStatusChanged, Status: model.NewStatusChange(from, target)})
 		it.StatusID, it.State = target.ID, target.Category
+		if target.Category != model.IssueStateCanceled {
+			it.Discard = nil
+		}
 	}
 	return it, nil
 }
@@ -177,15 +180,24 @@ func (s memStatuses) Create(_ context.Context, st *model.Status, afterID string)
 	return st, nil
 }
 
-func (s memStatuses) Update(_ context.Context, projectID, id string, name, _ *string) (*model.Status, error) {
+func (s memStatuses) Update(_ context.Context, projectID, id string, patch port.StatusPatch) (*model.Status, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st := s.status(projectID, id)
 	if st == nil {
 		return nil, domainerrors.NotFoundError("status not found", nil)
 	}
-	if name != nil {
-		st.Name = *name
+	if patch.Name != nil {
+		st.Name = *patch.Name
+	}
+	if patch.Color != nil {
+		st.Color, _ = model.ResolveStatusColor(*patch.Color, st.Category)
+	}
+	if patch.WIPLimit != nil {
+		st.WIPLimit = *patch.WIPLimit
+	}
+	if patch.Hidden != nil {
+		st.Hidden = *patch.Hidden
 	}
 	return st, nil
 }

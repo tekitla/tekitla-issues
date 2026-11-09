@@ -7,7 +7,7 @@ PROTOS_DIR ?= ../tekitla-protos
 BIN := bin/issues-service
 GOVULNCHECK_VERSION := v1.8.0
 
-.PHONY: help run build test test-race vet fmt lint vuln tidy vendor up down logs clean workspace workspace-off
+.PHONY: help run build test test-race test-migrations vet fmt lint vuln tidy vendor up down logs clean workspace workspace-off
 
 ## help: lista los targets
 help:
@@ -24,6 +24,10 @@ build:
 ## test: corre todos los tests
 test:
 	go test ./... -count=1
+
+## test-migrations: migraciones up/backfill/down/up contra un Postgres 16 descartable (docker)
+test-migrations:
+	bash scripts/test_migrations.sh
 
 ## test-race: tests con el race detector (requiere cgo)
 test-race:
