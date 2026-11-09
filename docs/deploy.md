@@ -18,7 +18,7 @@ git tag prod-v0.1.0 && git push origin prod-v0.1.0   # idem prod (auto salvo mig
 
 ```
 tag qa-v1.2.3 ─▶ CI: test ─▶ docker build ─▶ push <registry>/<repo>:qa-v1.2.3 y :qa
-                                          └▶ curl $COOLIFY_URL/api/v1/deploy?uuid=<recurso QA>
+                                          └▶ curl -X POST $COOLIFY_URL/api/v1/deploy?uuid=<recurso QA>
 Coolify (VPS) ─▶ docker compose -f docker-compose.coolify.yml up (pull_policy: always)
                  app (IMAGE_TAG=qa) ──red coolify──▶ Postgres compartido del entorno
 ```
@@ -131,12 +131,20 @@ override). Tag ruleset sobre `prod-v*` (Settings > Rules > Rulesets).
 El push a GHCR usa `GITHUB_TOKEN` (`packages: write`). La primera vez, el
 paquete queda privado y vinculado al repo; el VPS lo baja con el token del paso 1.
 
-Probar la llamada a la API a mano (no despliega nada si el UUID es inválido):
+La CI pide el deploy con **`POST /api/v1/deploy?uuid=<recurso>&force=false`**:
+desde Coolify 4.6 ese endpoint solo acepta `POST` (un `GET` responde
+`405 Method Not Allowed`, `This endpoint has changed to a POST request.`). El
+token necesita el permiso `deploy`. Si la respuesta no es 2xx, el job falla
+con el código HTTP y el mensaje de Coolify.
+
+Probar el token sin desplegar (`GET /api/v1/version` solo necesita `read`):
 
 ```bash
-curl -fsS "$COOLIFY_URL/api/v1/deploy?uuid=$COOLIFY_RESOURCE_UUID_QA&force=false" \
-  -H "Authorization: Bearer $COOLIFY_TOKEN"
+curl -fsS "$COOLIFY_URL/api/v1/version" -H "Authorization: Bearer $COOLIFY_TOKEN"
 ```
+
+> Un `POST /api/v1/deploy` con un UUID válido **despliega**: no lo uses para
+> probar el token.
 
 ## 6. Migraciones y primer deploy
 
@@ -248,4 +256,6 @@ Anotá fecha, tamaño del dump y tiempo de restore (es tu RTO real).
 | `failed to ping database` con `no such host` | Falta **Connect to Predefined Network** (paso 3) o el host no es el UUID del Postgres compartido |
 | `permission denied for schema issues` | Las migraciones se aplicaron con otro usuario: el schema tiene que ser de `tekitla_issues` |
 | La CI hace deploy pero sigue la versión vieja | El recurso no usa `IMAGE_TAG=qa` (o `prod`) o se perdió `pull_policy: always` |
-| `curl: (22) ... 401` en el job | `COOLIFY_TOKEN` inválido o sin permiso de deploy |
+| `Coolify respondió HTTP 401` en el job | `COOLIFY_TOKEN` inválido (403: sin permiso `deploy`) |
+| `Coolify respondió HTTP 405` en el job | El workflow pide el deploy con `GET`: Coolify ≥ 4.6 pide `POST` |
+| `Coolify respondió HTTP 404` en el job | `COOLIFY_RESOURCE_UUID_QA`/`_PROD` no es el UUID del recurso |
