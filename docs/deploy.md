@@ -20,12 +20,14 @@ git tag prod-v0.1.0 && git push origin prod-v0.1.0   # idem prod (auto salvo mig
 tag qa-v1.2.3 ─▶ CI: test ─▶ docker build ─▶ push <registry>/<repo>:qa-v1.2.3 y :qa
                                           └▶ curl $COOLIFY_URL/api/v1/deploy?uuid=<recurso QA>
 Coolify (VPS) ─▶ docker compose -f docker-compose.coolify.yml up (pull_policy: always)
-                 app (IMAGE_TAG=qa)  +  postgres:16 (volumen persistente)
+                 app (IMAGE_TAG=qa) ──red coolify──▶ Postgres compartido del entorno
 ```
 
 - **Un recurso de Coolify por entorno** (QA y prod), los dos con
-  `docker-compose.coolify.yml`. Si comparten VPS, cada uno tiene su propio
-  Postgres y su propio volumen.
+  `docker-compose.coolify.yml`. El compose **no levanta Postgres**: usa el
+  Postgres compartido de Coolify (proyecto `databases`, un Postgres 18 por
+  entorno para todos los proyectos personales), con base y usuario propios de
+  este servicio (paso 2).
 - La imagen se construye **una vez en la CI**; el VPS solo la baja. Tags: el
   inmutable (`qa-v1.2.3`) y uno móvil por entorno (`qa` / `prod`).
 - **Mismas variables de entorno que Cloud Run** (`APP_ENV`, `SERVICE_ENV`,
@@ -49,7 +51,26 @@ docker login ghcr.io -u <usuario> --password-stdin
 Coolify también permite cargar credenciales de registry desde el panel en
 algunas versiones; el `docker login` en el servidor funciona en cualquier caso.
 
-## 2. Crear el recurso (QA; repetir para prod)
+## 2. Base y usuario en el Postgres compartido (QA; repetir para prod)
+
+Cada servicio tiene **su propia base y su propio usuario** dentro del Postgres
+compartido del entorno; ningún servicio usa el superusuario ni la base de otro.
+Lo corre una persona, conectada como superusuario al Postgres compartido
+(terminal del recurso en Coolify, o `psql` por el túnel del paso 6). La
+contraseña se pide con `\password`: no se escribe en el SQL.
+
+```sql
+CREATE ROLE tekitla_issues LOGIN;
+\password tekitla_issues
+CREATE DATABASE tekitla_issues OWNER tekitla_issues;
+REVOKE ALL ON DATABASE tekitla_issues FROM PUBLIC;
+```
+
+Generá la contraseña con `openssl rand -hex 24` (hex: no hay que escaparla en
+la URL). Las migraciones crean el schema `issues` con este usuario como dueño
+(paso 6).
+
+## 3. Crear el recurso (QA; repetir para prod)
 
 1. Proyecto/entorno en Coolify (p. ej. proyecto `issues-service`, entornos
    `qa` y `production`).
@@ -58,10 +79,13 @@ algunas versiones; el `docker login` en el servidor funciona en cualquier caso.
 3. Rama: la principal. **Docker Compose location**: `/docker-compose.coolify.yml`.
 4. Desactivá el auto-deploy por push/webhook del recurso: el deploy lo dispara
    la CI cuando hay un tag, no cada commit a la rama.
-5. Anotá el **UUID** del recurso (aparece en la URL del panel y en la config):
+5. Activá **Connect to Predefined Network** en la configuración del recurso:
+   conecta los contenedores a la red `coolify`, donde el Postgres compartido
+   se resuelve por el UUID de su recurso. Sin esto la app no llega a la base.
+6. Anotá el **UUID** del recurso (aparece en la URL del panel y en la config):
    va a `COOLIFY_RESOURCE_UUID_QA` (o `_PROD`).
 
-## 3. Variables de entorno (panel del recurso)
+## 4. Variables de entorno (panel del recurso)
 
 Coolify detecta las `${VAR}` del compose y las lista en *Environment
 Variables*. Las marcadas con `:?` son obligatorias (el deploy falla si faltan).
@@ -74,24 +98,22 @@ Variables*. Las marcadas con `:?` son obligatorias (el deploy falla si faltan).
 | `SERVICE_ENV` | `qa` | `production` | |
 | `DEBUG` | `true` | `false` | |
 | `LOG_LEVEL` | `debug` | `info` | |
-| `POSTGRES_USER` | `issues_user` | `issues_user` | Opcional (default) |
-| `POSTGRES_DB` | `issues` | `issues` | Opcional (default) |
-| `POSTGRES_PASSWORD` | secreto | secreto | `openssl rand -hex 24` (hex: no hay que escaparlo en la URL) |
 | `DATABASE_URL` | ver abajo | ver abajo | Secreto |
-| `PG_LOCAL_PORT` | `15432` | `15433` | Puerto de Postgres en `127.0.0.1` del VPS (distinto por recurso) |
 
 ```
-DATABASE_URL=postgres://issues_user:<POSTGRES_PASSWORD>@postgres:5432/issues?sslmode=disable
+DATABASE_URL=postgres://tekitla_issues:<contraseña>@<UUID-del-postgres>:5432/tekitla_issues?sslmode=disable
 ```
 
-`postgres` es el nombre del servicio dentro del compose. `GRPC_PORT` y
-`OTEL_SERVICE_NAME` están fijos en el compose (`5000` / `issues-service`).
+El host es el **UUID del recurso de Postgres compartido** del entorno (en QA,
+`postgres-qa`: `glisbusivbo0vdizn0bfk6m4`), que es su nombre en la red
+`coolify`. `sslmode=disable` porque el tráfico no sale de la red de Docker del
+VPS. `GRPC_PORT` y `OTEL_SERVICE_NAME` están fijos en el compose (`5000` /
+`issues-service`).
 
-> `POSTGRES_PASSWORD` solo se usa al **crear** el volumen. Cambiarlo después
-> no cambia la contraseña de la base: hacelo con `ALTER USER` y actualizá
-> `DATABASE_URL`.
+> Cambiar la contraseña: `\password tekitla_issues` en el Postgres
+> compartido, actualizar `DATABASE_URL` en el panel y Redeploy.
 
-## 4. Variables de la CI
+## 5. Variables de la CI
 
 Settings > Secrets and variables > Actions:
 
@@ -116,18 +138,32 @@ curl -fsS "$COOLIFY_URL/api/v1/deploy?uuid=$COOLIFY_RESOURCE_UUID_QA&force=false
   -H "Authorization: Bearer $COOLIFY_TOKEN"
 ```
 
-## 5. Primer deploy y migraciones
+## 6. Migraciones y primer deploy
 
-1. `git tag qa-v0.1.0 && git push origin qa-v0.1.0`. La CI construye, pushea y
-   dispara el deploy. Postgres arranca vacío; la app arranca igual (solo hace
-   ping a la base) y el healthcheck la marca `healthy`.
-2. Aplicá las migraciones por túnel SSH al Postgres del recurso:
+Las migraciones se aplican **antes** del deploy que las necesita, por túnel SSH
+al Postgres compartido y **con el usuario del servicio** (así el schema
+`issues` queda a su nombre).
+
+1. Túnel. El Postgres compartido no publica puertos a internet: el túnel va a
+   la IP de su contenedor en la red `coolify`.
 
 ```bash
-ssh -N -L 15432:127.0.0.1:15432 usuario@vps &        # PG_LOCAL_PORT del recurso
-read -rs DATABASE_URL && export DATABASE_URL          # postgres://issues_user:<pass>@localhost:15432/issues?sslmode=disable
+# En el VPS: IP del contenedor del Postgres compartido (cambia si se recrea)
+docker inspect -f '{{ (index .NetworkSettings.Networks "coolify").IPAddress }}' <UUID-del-postgres>
+# En tu máquina:
+ssh -N -L 15432:<IP-del-contenedor>:5432 usuario@vps &
+```
+
+2. Migraciones, en orden (`000001`, `000002`, `000003`, …):
+
+```bash
+read -rs DATABASE_URL && export DATABASE_URL   # postgres://tekitla_issues:<pass>@localhost:15432/tekitla_issues?sslmode=disable
 ./scripts/apply_migration.sh qa 000001_create_issues_schema
 ```
+
+3. `git tag qa-v0.1.0 && git push origin qa-v0.1.0`. La CI construye, pushea y
+   dispara el deploy; el healthcheck marca la app `healthy` (al arrancar solo
+   hace ping a la base).
 
 En prod: `./scripts/apply_migration.sh prod <migración>` (prueba en seco) y
 después `--apply` (pide escribir el nombre de la base).
@@ -135,16 +171,15 @@ después `--apply` (pide escribir el nombre de la base).
 El **primer** `prod-v*` siempre va por el override
 (Actions > ci > Run workflow): no hay tag anterior contra el que comparar.
 
-## 6. Dominio y exposición de gRPC
+## 7. Dominio y exposición de gRPC
 
 El servicio es **interno**: el compose no publica el puerto de la app al host
 (solo `expose`). Lo normal es que lo llame un gateway HTTP que corre en el
 mismo servidor y es lo único con dominio público.
 
 - **Gateway en otro recurso de Coolify**: cada recurso de Docker Compose tiene
-  su propia red. Para que el gateway resuelva este servicio hay que ponerlos en
-  una red compartida (Coolify tiene una opción para conectar el recurso a la
-  red predefinida; verificá el nombre en tu versión) y usar como host el
+  su propia red. Este recurso ya está en la red predefinida `coolify` (paso 3,
+  por el Postgres); el gateway también tiene que estarlo, y usa como host el
   nombre del contenedor/servicio que muestra Coolify.
 - **gRPC público detrás del proxy de Coolify (Traefik)**: gRPC necesita HTTP/2
   de punta a punta. Traefik termina TLS y por defecto habla con el backend por
@@ -157,51 +192,31 @@ mismo servidor y es lo único con dominio público.
 - Si le asignás dominio al servicio `app` en el panel, Coolify genera las
   labels de Traefik para el puerto que indiques (`5000`).
 
-## 7. Backups de Postgres a S3 (y prueba de restore)
+## 8. Backups (y prueba de restore)
 
-El volumen `pgdata` vive en el disco del VPS: si el VPS se pierde, se pierde la
-base. **Configurá backups antes de tener datos reales en prod.** RPO = la
-frecuencia del backup (no hay point-in-time recovery).
+La base vive en el Postgres compartido: los backups programados a S3 se
+configuran **una vez en el recurso de Postgres** (proyecto `databases`, pestaña
+*Backups*) y no en este recurso. Verificá que incluyan `tekitla_issues`
+**antes de tener datos reales en prod**. RPO = la frecuencia del backup (no hay
+point-in-time recovery).
 
-### Opción A — backups de Coolify
-
-Coolify v4 tiene backups programados a S3 (*S3 Storages* en la configuración
-+ pestaña *Backups* de la base). Para recursos de tipo Database está
-documentado; para un Postgres **dentro** de un Docker Compose propio, verificá
-que tu versión muestre la pestaña de backups en ese servicio. Si aparece:
-configurá el bucket, la frecuencia (p. ej. diaria) y la retención, y pasá a la
-prueba de restore.
-
-### Opción B — cron en el VPS (no depende de la versión de Coolify)
-
-Script en el VPS (p. ej. `/opt/backups/issues-service-prod.sh`, `chmod 700`),
-con las credenciales de S3 en un archivo `600` fuera del repo:
+Para un dump puntual solo de este servicio (p. ej. antes de una migración en
+prod), por el túnel del paso 6:
 
 ```bash
-#!/usr/bin/env bash
-set -euo pipefail
-# Contenedor de postgres del recurso (Coolify incluye el UUID del recurso en el nombre;
-# confirmalo con `docker ps`).
-PG="$(docker ps --filter "name=postgres-<UUID-del-recurso>" --format '{{.Names}}' | head -1)"
-[ -n "$PG" ] || { echo "no encontré el contenedor de postgres" >&2; exit 1; }
-STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-docker exec "$PG" pg_dump -U issues_user -d issues -Fc \
-  | docker run --rm -i --env-file /opt/backups/s3.env amazon/aws-cli \
-      s3 cp - "s3://<bucket>/issues-service/prod/${STAMP}.dump"
+read -rs PGPASSWORD && export PGPASSWORD
+docker run --rm -e PGPASSWORD postgres:18 pg_dump -h host.docker.internal -p 15432 \
+  -U tekitla_issues -d tekitla_issues -n issues -Fc > "tekitla_issues-$(date -u +%Y%m%dT%H%M%SZ).dump"
 ```
-
-`s3.env`: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION` (y
-para un S3 compatible que no sea AWS, agregá `--endpoint-url` al comando).
-Cron: `15 3 * * * /opt/backups/issues-service-prod.sh >> /var/log/issues-service-backup.log 2>&1`.
-Retención: lifecycle rule del bucket (p. ej. borrar a los 30 días).
 
 ### Prueba de restore (mensual, y siempre después de cambiar el backup)
 
 Un backup que nunca se restauró no es un backup. En cualquier máquina con Docker:
 
 ```bash
-aws s3 cp "s3://<bucket>/issues-service/prod/<STAMP>.dump" ./restore-test.dump
-docker run -d --name restore-test -e POSTGRES_PASSWORD=test -p 55432:5432 postgres:16
+# Un dump de la base (backup del Postgres compartido o el dump puntual de arriba)
+cp <dump> ./restore-test.dump
+docker run -d --name restore-test -e POSTGRES_PASSWORD=test -p 55432:5432 postgres:18
 sleep 5
 docker exec -i restore-test pg_restore -U postgres -d postgres --no-owner --no-privileges --exit-on-error < restore-test.dump
 docker exec restore-test psql -U postgres -c "SELECT count(*) FROM issues.issues"
@@ -211,7 +226,7 @@ docker rm -f restore-test && rm restore-test.dump
 
 Anotá fecha, tamaño del dump y tiempo de restore (es tu RTO real).
 
-## 8. Release, guarda de prod y rollback
+## 9. Release, guarda de prod y rollback
 
 - `qa-v*` → deploy automático a QA.
 - `prod-v*` → la guarda compara contra el `prod-v*` anterior; si el rango toca
@@ -223,13 +238,14 @@ Anotá fecha, tamaño del dump y tiempo de restore (es tu RTO real).
   flujo normal, `IMAGE_TAG=prod` y un tag nuevo. Si la versión mala trajo una
   migración, evaluá el `.down.sql` antes de volver a una imagen vieja.
 
-## 9. Diagnóstico
+## 10. Diagnóstico
 
 | Síntoma | Causa probable |
 |---|---|
 | El deploy falla con `required variable ... is missing a value` | Falta una variable `:?` en el panel |
 | `pull access denied` / `unauthorized` | Falta el `docker login` del paso 1 en el VPS |
 | La app queda `unhealthy` | `DATABASE_URL` mal (mirá los logs: `failed to ping database`) o el puerto no es `5000` |
+| `failed to ping database` con `no such host` | Falta **Connect to Predefined Network** (paso 3) o el host no es el UUID del Postgres compartido |
+| `permission denied for schema issues` | Las migraciones se aplicaron con otro usuario: el schema tiene que ser de `tekitla_issues` |
 | La CI hace deploy pero sigue la versión vieja | El recurso no usa `IMAGE_TAG=qa` (o `prod`) o se perdió `pull_policy: always` |
 | `curl: (22) ... 401` en el job | `COOLIFY_TOKEN` inválido o sin permiso de deploy |
-| `bind: address already in use` en postgres | Dos recursos con el mismo `PG_LOCAL_PORT` |

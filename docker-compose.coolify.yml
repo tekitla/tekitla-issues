@@ -16,9 +16,12 @@
 # - Mismas variables que Cloud Run (APP_ENV, SERVICE_ENV, DEBUG, LOG_LEVEL,
 #   GRPC_PORT, DATABASE_URL, OTEL_*): migrar de destino no toca el código.
 # - Puertos: la app NO publica puertos al host (la ven Traefik/otros
-#   contenedores por la red de Docker). Postgres publica solo en 127.0.0.1 del
-#   VPS (PG_LOCAL_PORT, distinto por entorno) para aplicar migraciones, hacer
-#   dumps y migrar datos por túnel SSH; nunca queda expuesto a internet.
+#   contenedores por la red de Docker).
+# - Base de datos: el Postgres COMPARTIDO de Coolify (proyecto `databases`, un
+#   Postgres por entorno para todos los proyectos), con base y usuario propios
+#   de este servicio. Este compose no levanta Postgres: DATABASE_URL apunta al
+#   UUID del recurso de Postgres, que se resuelve por la red predefinida
+#   `coolify` (activar "Connect to Predefined Network" en el recurso).
 # - Migraciones: NO se aplican solas. scripts/apply_migration.sh por túnel,
 #   antes del deploy que las necesita (mismo criterio que Cloud Run).
 # =============================================================================
@@ -28,17 +31,14 @@ services:
     image: ${IMAGE_REPO:-ghcr.io/tekitla/tekitla-issues}:${IMAGE_TAG:?}
     pull_policy: always
     restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
     environment:
       APP_ENV: ${APP_ENV:-production}
       SERVICE_ENV: ${SERVICE_ENV:-production}
       DEBUG: ${DEBUG:-false}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       GRPC_PORT: "5000"
-      # postgres://<POSTGRES_USER>:<POSTGRES_PASSWORD>@postgres:5432/<POSTGRES_DB>?sslmode=disable
-      # (o la URL de un Postgres externo/administrado: este servicio no la arma).
+      # postgres://tekitla_issues:<pass>@<UUID-del-postgres-compartido>:5432/tekitla_issues?sslmode=disable
+      # (ver docs/deploy.md; este servicio no la arma).
       DATABASE_URL: ${DATABASE_URL:?}
       OTEL_SERVICE_NAME: issues-service
       OTEL_RESOURCE_ATTRIBUTES: service.version=${IMAGE_TAG},deployment.environment=${SERVICE_ENV:-production}
@@ -53,22 +53,3 @@ services:
       retries: 5
       start_period: 15s
 
-  postgres:
-    image: postgres:16
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-issues_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
-      POSTGRES_DB: ${POSTGRES_DB:-issues}
-    ports:
-      - "127.0.0.1:${PG_LOCAL_PORT:?}:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-volumes:
-  pgdata:
