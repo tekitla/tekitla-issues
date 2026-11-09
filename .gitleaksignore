@@ -1,0 +1,4 @@
+# Falsos positivos de gitleaks (generic-api-key): el campo SourceKey de los
+# tests de ImportIssue (issue 025) no es un secreto.
+4a23c795ec97a02336d10cab49fba3ff7b4fe779:app/application/actor_service_test.go:generic-api-key:219
+4a23c795ec97a02336d10cab49fba3ff7b4fe779:app/adapters/grpc/handler/actor_handler_test.go:generic-api-key:512

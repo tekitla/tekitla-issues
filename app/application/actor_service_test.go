@@ -275,7 +275,7 @@ func TestIssueService_ImportIssue(t *testing.T) {
 	}}
 	svc := application.NewIssueService(personalWorkspaces(), ownedProjects(), issues, projectStatuses(), &mockLabelRepo{}, &mockActorRepo{})
 	_, outcome, err := svc.ImportIssue(ctx, as(owner), application.ImportIssueInput{
-		ProjectID: validID, SourceKey: " 236-claude-md-en-capas ", Number: 236, Title: " CLAUDE.md ",
+		ProjectID: validID, SourceKey: " 236-claude-md-en-capas ", Number: 236, Title: " CLAUDE.md ", //gitleaks:allow
 		State: model.IssueStateInProgress, LabelNames: []string{"infra", " Infra ", "backend"},
 	})
 	if err != nil || outcome != model.ImportCreated {

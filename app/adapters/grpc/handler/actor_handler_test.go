@@ -509,7 +509,7 @@ func TestIssueHandler_ImportIssue(t *testing.T) {
 	}
 	pid := project.GetProject().GetId()
 	req := &issuesv1.ImportIssueRequest{
-		ProjectId: pid, SourceKey: "236-claude-md-en-capas", Number: 236, Title: "CLAUDE.md en capas",
+		ProjectId: pid, SourceKey: "236-claude-md-en-capas", Number: 236, Title: "CLAUDE.md en capas", //gitleaks:allow
 		State: issuesv1.IssueState_ISSUE_STATE_IN_PROGRESS, Priority: issuesv1.Priority_PRIORITY_HIGH,
 		CreatedAt: timestamppb.New(time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC)),
 	}
