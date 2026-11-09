@@ -6,7 +6,7 @@ db_schema: issues
 deploy_target: coolify
 docs_repo: ''
 dueño: '@vrojas1015'
-go_version: 1.25.8
+go_version: 1.26.10
 grpc_port: 5000
 module_path: github.com/tekitla/tekitla-issues
 protos_module: github.com/tekitla/tekitla-protos
