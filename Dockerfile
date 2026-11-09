@@ -11,7 +11,7 @@
 # ──────────────────────────────────────────────
 # STAGE 1: BUILD
 # ──────────────────────────────────────────────
-FROM golang:1.25.8 AS builder
+FROM golang:1.26.10 AS builder
 
 # CGO_ENABLED=0: pgx/v5 es pure-Go, no hace falta cgo.
 # GOWORK=off: `-mod=vendor` es incompatible con go.work. El .dockerignore ya lo
