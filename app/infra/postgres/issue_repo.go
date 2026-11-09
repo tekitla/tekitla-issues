@@ -34,8 +34,12 @@ type issueRow struct {
 	DiscardReason *string    `gorm:"column:discard_reason"`
 	DiscardedBy   *string    `gorm:"column:discarded_by"`
 	DiscardedAt   *time.Time `gorm:"column:discarded_at"`
-	CreatedAt     time.Time  `gorm:"column:created_at"`
-	UpdatedAt     time.Time  `gorm:"column:updated_at"`
+	// Asignado y clave de origen (000005): NULL = sin asignar / creado en
+	// Tekitla.
+	AssigneeActorID *string   `gorm:"column:assignee_actor_id;type:uuid"`
+	SourceKey       *string   `gorm:"column:source_key"`
+	CreatedAt       time.Time `gorm:"column:created_at"`
+	UpdatedAt       time.Time `gorm:"column:updated_at"`
 }
 
 func (issueRow) TableName() string { return "issues.issues" }
@@ -63,7 +67,7 @@ var errProjectNotOwned = errors.New("project not found in workspaces")
 // sale del mayor rank del proyecto, leído con el lock tomado). Si el INSERT
 // falla, el rollback devuelve el número (no queda hueco); como no hay borrado
 // de issues, un número asignado nunca se reutiliza.
-func (r *IssueRepository) Create(ctx context.Context, workspaceIDs []string, issue *model.Issue, actorUID string) (*model.Issue, error) {
+func (r *IssueRepository) Create(ctx context.Context, workspaceIDs []string, issue *model.Issue, author model.Author) (*model.Issue, error) {
 	row := toIssueRow(issue)
 	now := dbNow()
 	row.CreatedAt, row.UpdatedAt = now, now
@@ -113,7 +117,17 @@ func (r *IssueRepository) Create(ctx context.Context, workspaceIDs []string, iss
 		if err := tx.Create(row).Error; err != nil {
 			return err
 		}
-		return insertEvent(tx, row.ID, actorUID, &model.IssueEvent{Kind: model.EventCreated}, now)
+		if err := insertEvent(tx, row.ID, author, &model.IssueEvent{Kind: model.EventCreated}, now); err != nil {
+			return err
+		}
+		if issue.AssigneeActorID == "" {
+			return nil
+		}
+		ev := &model.IssueEvent{Kind: model.EventAssigneeChanged, Assignee: &model.AssigneeChange{ToID: issue.AssigneeActorID}}
+		if err := fillAssigneeNames(tx, ev.Assignee); err != nil {
+			return err
+		}
+		return insertEvent(tx, row.ID, author, ev, now)
 	})
 	if errors.Is(err, errProjectNotOwned) {
 		return nil, domainerrors.NotFoundError("project not found", map[string]any{"id": issue.ProjectID})
@@ -164,6 +178,13 @@ func (r *IssueRepository) List(ctx context.Context, filter port.IssueFilter) (*p
 	}
 	if len(filter.LabelIDs) > 0 {
 		query = query.Where("EXISTS (SELECT 1 FROM issues.issue_labels il WHERE il.issue_id = i.id AND il.label_id IN ?)", filter.LabelIDs)
+	}
+	if len(filter.AssigneeActorIDs) > 0 && filter.Unassigned {
+		query = query.Where("(i.assignee_actor_id IN ? OR i.assignee_actor_id IS NULL)", filter.AssigneeActorIDs)
+	} else if len(filter.AssigneeActorIDs) > 0 {
+		query = query.Where("i.assignee_actor_id IN ?", filter.AssigneeActorIDs)
+	} else if filter.Unassigned {
+		query = query.Where("i.assignee_actor_id IS NULL")
 	}
 	if s := filter.Search; s.Text != "" {
 		// La misma función a los dos lados: sin mayúsculas ni acentos. El texto
@@ -253,6 +274,8 @@ func toIssueRow(m *model.Issue) *issueRow {
 	if d := m.Discard; d != nil {
 		row.DiscardReason, row.DiscardedBy, row.DiscardedAt = &d.Reason, &d.ActorUID, &d.DiscardedAt
 	}
+	row.AssigneeActorID = nilIfEmpty(m.AssigneeActorID)
+	row.SourceKey = nilIfEmpty(m.SourceKey)
 	return row
 }
 
@@ -273,5 +296,46 @@ func fromIssueRow(r *issueRow) *model.Issue {
 	if r.DiscardReason != nil && r.DiscardedBy != nil && r.DiscardedAt != nil {
 		issue.Discard = &model.DiscardInfo{Reason: *r.DiscardReason, ActorUID: *r.DiscardedBy, DiscardedAt: *r.DiscardedAt}
 	}
+	if r.AssigneeActorID != nil {
+		issue.AssigneeActorID = *r.AssigneeActorID
+	}
+	if r.SourceKey != nil {
+		issue.SourceKey = *r.SourceKey
+	}
 	return issue
+}
+
+func nilIfEmpty(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+// fillAssigneeNames completa los nombres del cambio de asignado con los de
+// los actores al momento del cambio (vacío = sin asignar, o una persona: el
+// servicio no conoce su nombre).
+func fillAssigneeNames(tx *gorm.DB, c *model.AssigneeChange) error {
+	ids := make([]string, 0, 2)
+	for _, id := range []string{c.FromID, c.ToID} {
+		if id != "" {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	var rows []actorRow
+	if err := tx.Where("id IN ?", ids).Find(&rows).Error; err != nil {
+		return err
+	}
+	for _, r := range rows {
+		if r.ID == c.FromID {
+			c.FromName = r.DisplayName
+		}
+		if r.ID == c.ToID {
+			c.ToName = r.DisplayName
+		}
+	}
+	return nil
 }

@@ -22,8 +22,8 @@ import (
 // lógica de verdad (ranks entre columnas, FK, carreras) la cubren el repo de
 // Postgres y la prueba con grpcurl; acá alcanza con el recorrido.
 
-func (s *memStore) addEvent(issueID, actor string, ev *model.IssueEvent) {
-	ev.ID, ev.IssueID, ev.ActorUID, ev.CreatedAt = uuid.NewString(), issueID, actor, time.Now()
+func (s *memStore) addEvent(issueID string, author model.Author, ev *model.IssueEvent) {
+	ev.ID, ev.IssueID, ev.ActorUID, ev.AgentID, ev.CreatedAt = uuid.NewString(), issueID, author.UserID, author.AgentID, time.Now()
 	s.events = append(s.events, ev)
 }
 
@@ -49,7 +49,7 @@ func (s *memStore) status(projectID, id string) *model.Status {
 
 // --- IssueRepository (lo nuevo) ---
 
-func (s memIssues) Move(_ context.Context, projectID string, number int32, target *model.Status, place port.Placement, actor string) (*model.Issue, error) {
+func (s memIssues) Move(_ context.Context, projectID string, number int32, target *model.Status, place port.Placement, author model.Author) (*model.Issue, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	it := s.find(projectID, number)
@@ -72,7 +72,7 @@ func (s memIssues) Move(_ context.Context, projectID string, number int32, targe
 	}
 	if it.StatusID != target.ID {
 		from := s.status(projectID, it.StatusID)
-		s.addEvent(it.ID, actor, &model.IssueEvent{Kind: model.EventStatusChanged, Status: model.NewStatusChange(from, target)})
+		s.addEvent(it.ID, author, &model.IssueEvent{Kind: model.EventStatusChanged, Status: model.NewStatusChange(from, target)})
 		it.StatusID, it.State = target.ID, target.Category
 		if target.Category != model.IssueStateCanceled {
 			it.Discard = nil
@@ -81,7 +81,7 @@ func (s memIssues) Move(_ context.Context, projectID string, number int32, targe
 	return it, nil
 }
 
-func (s memIssues) Update(_ context.Context, projectID string, number int32, patch model.IssuePatch, actor string) (*model.Issue, error) {
+func (s memIssues) Update(_ context.Context, projectID string, number int32, patch model.IssuePatch, author model.Author) (*model.Issue, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	it := s.find(projectID, number)
@@ -93,7 +93,7 @@ func (s memIssues) Update(_ context.Context, projectID string, number int32, pat
 		labels[l.ID] = l
 	}
 	for _, ev := range model.IssueChanges(it, patch, labels) {
-		s.addEvent(it.ID, actor, ev)
+		s.addEvent(it.ID, author, ev)
 	}
 	if patch.Title != nil {
 		it.Title = *patch.Title
@@ -107,10 +107,13 @@ func (s memIssues) Update(_ context.Context, projectID string, number int32, pat
 	if patch.LabelIDs != nil {
 		it.LabelIDs = append([]string{}, *patch.LabelIDs...)
 	}
+	if patch.AssigneeActorID != nil {
+		it.AssigneeActorID = *patch.AssigneeActorID
+	}
 	return it, nil
 }
 
-func (s memIssues) AddComment(_ context.Context, projectID string, number int32, c *model.Comment) (*model.Comment, error) {
+func (s memIssues) AddComment(_ context.Context, projectID string, number int32, c *model.Comment, author model.Author) (*model.Comment, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	it := s.find(projectID, number)
@@ -118,7 +121,7 @@ func (s memIssues) AddComment(_ context.Context, projectID string, number int32,
 		return nil, domainerrors.NotFoundError("issue not found", nil)
 	}
 	c.IssueID, c.CreatedAt = it.ID, time.Now()
-	s.addEvent(it.ID, c.AuthorUID, &model.IssueEvent{Kind: model.EventCommented, Comment: c})
+	s.addEvent(it.ID, author, &model.IssueEvent{Kind: model.EventCommented, Comment: c})
 	return c, nil
 }
 
@@ -202,7 +205,7 @@ func (s memStatuses) Update(_ context.Context, projectID, id string, patch port.
 	return st, nil
 }
 
-func (s memStatuses) Delete(_ context.Context, projectID, id, moveToID, actor string) error {
+func (s memStatuses) Delete(_ context.Context, projectID, id, moveToID string, author model.Author) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st := s.status(projectID, id)
@@ -226,7 +229,7 @@ func (s memStatuses) Delete(_ context.Context, projectID, id, moveToID, actor st
 		if target == nil {
 			return domainerrors.FailedPreconditionError("status has issues", nil)
 		}
-		s.addEvent(it.ID, actor, &model.IssueEvent{Kind: model.EventStatusChanged, Status: model.NewStatusChange(st, target)})
+		s.addEvent(it.ID, author, &model.IssueEvent{Kind: model.EventStatusChanged, Status: model.NewStatusChange(st, target)})
 		it.StatusID, it.State = target.ID, target.Category
 	}
 	s.statuses = slices.DeleteFunc(s.statuses, func(o *model.Status) bool { return o.ID == id })

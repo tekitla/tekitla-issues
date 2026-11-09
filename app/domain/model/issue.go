@@ -76,7 +76,13 @@ type Issue struct {
 	LabelIDs []string
 	// Discard es el motivo del descarte (DiscardIssue). nil si no está
 	// descartado o si se descartó con MoveIssue. Solo en un estado CANCELED.
-	Discard   *DiscardInfo
+	Discard *DiscardInfo
+	// AssigneeActorID es el actor asignado (persona o agente); vacío = sin
+	// asignar. Puede ser un actor ya revocado.
+	AssigneeActorID string
+	// SourceKey es la clave en el tracker de origen (ImportIssue); vacía si
+	// se creó en Tekitla.
+	SourceKey string
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }

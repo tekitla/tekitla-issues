@@ -21,6 +21,14 @@ const healthMethodPrefix = "/grpc.health.v1.Health/"
 var loggedMetadata = map[string]string{
 	"x-request-id": "request_id",
 	"x-user-id":    "user_id",
+	"x-agent-id":   "agent_id",
+}
+
+// secretMethods llevan un token en claro en el request o en la respuesta:
+// nunca se loguea su payload, ni con debug (issue 025, ADR 0009).
+var secretMethods = map[string]bool{
+	"/issues.v1.TokenAuthService/ResolveToken": true,
+	"/issues.v1.ActorService/CreateToken":      true,
 }
 
 // UnaryLogger retorna un interceptor que loguea cada petición gRPC unaria.
@@ -33,6 +41,7 @@ func UnaryLogger(logger *zap.Logger, debug bool) grpc.UnaryServerInterceptor {
 		handler grpc.UnaryHandler,
 	) (any, error) {
 		start := time.Now()
+		debug := debug && !secretMethods[info.FullMethod]
 
 		if debug {
 			logger.Debug("gRPC request received",

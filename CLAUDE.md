@@ -7,20 +7,29 @@ trabajo (hoy, el personal de cada usuario) y sus issues, con estados
 configurables por proyecto (cada uno de una categoría fija: por hacer, en
 curso, hecho, descartado), orden manual por `rank`, etiquetas, comentarios e
 historial (rebanada 3a), descartar con motivo (issue 011), búsqueda, filtros
-y orden en la lista (012) y color, límite WIP y columnas ocultas (013).
+y orden en la lista (012), color, límite WIP y columnas ocultas (013) y
+actores, agentes, tokens por actor, asignado e importación (025, ADR 0009 del
+repo docs).
 
 - **Contrato**: `issues.v1.IssueService` de `github.com/tekitla/tekitla-protos`
   (`gen/go/issues/v1`): proyectos, issues (`ListIssues`, `GetIssue`,
   `CreateIssue`, `MoveIssue`, `UpdateIssue`, `DiscardIssue`, `RestoreIssue`),
-  estados (con `BatchUpdateStatuses`), etiquetas, `CreateComment` y
-  `ListIssueEvents`. Los comentarios del `.proto` son la
-  especificación.
+  estados (con `BatchUpdateStatuses`), etiquetas, `CreateComment`,
+  `ListIssueEvents` e `ImportIssue`; `issues.v1.ActorService` (agentes y
+  tokens) e `issues.v1.TokenAuthService` (`ResolveToken`, interno). Los
+  comentarios del `.proto` son la especificación.
 - **Quién lo llama**: solo el `tekitla-gateway` (api-gateway), que autentica y
   propaga la identidad en la metadata gRPC `x-user-id` (además `x-roles` y
   `x-request-id`).
-- **Identidad**: todo RPC exige `x-user-id` no vacío (si no, `UNAUTHENTICATED`).
-  La lee el adapter (`handler/identity.go`) y la pasa como parámetro explícito
-  (`ownerUID`) a la capa de aplicación; el dominio no lee el context.
+- **Identidad**: todo RPC exige `x-user-id` no vacío (si no, `UNAUTHENTICATED`),
+  salvo `ResolveToken`. La lee el adapter (`handler/identity.go`) y la pasa
+  como parámetro explícito (`ownerUID`) a la capa de aplicación; el dominio no
+  lee el context. Con un token de agente el gateway manda además
+  `x-agent-id`: las escrituras reciben un `model.Author` (persona + agente,
+  `requireAuthor`) y el historial guarda `actor_uid` = la persona y
+  `agent_id` = el agente. Un `x-agent-id` que no es UUID → `UNAUTHENTICATED`;
+  uno que no existe no escribe (FK). `ActorService` e `ImportIssue` rechazan
+  a un agente (`PERMISSION_DENIED`, `requirePerson`).
 - **Espacios de trabajo**: cada usuario tiene un espacio personal
   (`issues.workspaces`, uno por `owner_uid`) que se crea con su primer
   proyecto (`WorkspaceRepository.EnsurePersonal`, seguro con concurrencia); las
@@ -69,6 +78,45 @@ Reglas de negocio no obvias:
   cambio (DTOs en `event_repo.go`: solo agregar campos).
 - Etiquetas: máximo 100 por proyecto y 20 por issue; nombre único sin
   mayúsculas (`LABEL_NAME_TAKEN`); borrar una la quita de los issues sin evento.
+- Actores (025): una persona por uid (`issues.actors.user_uid` único), creada
+  la primera vez que hace falta (`ActorRepository.EnsurePerson`, `ON CONFLICT
+  DO NOTHING`); su `display_name` es vacío (el servicio no conoce nombres).
+  Un agente cuelga de una persona (`owner_actor_id`) con `tool`; nombre único
+  sin mayúsculas entre los no revocados del dueño (`AGENT_NAME_TAKEN`).
+  Solo la persona crea agentes para sí (otro dueño → `PERMISSION_DENIED`) y
+  revoca a sí misma o a sus agentes; un actor o token ajeno → `NOT_FOUND`.
+  Revocar a una persona revoca a sus agentes (misma transacción); una persona
+  revocada no crea agentes ni tokens (`FAILED_PRECONDITION`
+  `ACTOR_REVOKED`). No hay revocación por admin: se hace en la base
+  (runbook de la allowlist en el repo docs).
+- Tokens (025): `tka_` + 32 bytes de `crypto/rand` en base64url; se guarda
+  solo el SHA-256 (`issues.tokens.token_hash`) y el secreto sale una sola vez
+  en `CreateTokenResponse`. Scopes `issues:read`/`issues:write` (enum, sin
+  repetidos, en orden del enum), vencimiento obligatorio (30 días por
+  defecto, 90 como máximo: `model.TokenExpiry`). `ResolveToken` es un solo
+  `UPDATE … FROM … RETURNING` que exige token sin revocar ni vencer y actor y
+  dueño sin revocar, y marca `last_used_at`; cualquier falla →
+  `UNAUTHENTICATED` sin detalle (un error de la base sale como error, para
+  que el gateway responda 503 y no 401). Revocar un actor no cambia el
+  `revoked_at` de sus tokens: dejan de valer porque `ResolveToken` mira la
+  cadena. El interceptor nunca loguea el payload de `ResolveToken` ni de
+  `CreateToken` (ni con `DEBUG`).
+- Asignado (025): `issues.assignee_actor_id` nullable; asignar exige un
+  actor visible (la persona o uno de sus agentes) y no revocado (si no,
+  `INVALID_ARGUMENT`); puede quedar asignado a uno revocado. Evento
+  `assignee_changed` con los nombres al momento. `ListIssues` filtra por
+  `assignee_actor_ids` O `unassigned`; un id que no es UUID no trae nada; el
+  filtro entra en la huella del cursor solo si se usa (los cursores de v0.4
+  siguen valiendo).
+- `ImportIssue` (025): idempotente por `source_key` (única por proyecto),
+  con el lock del proyecto. Crea con el número del origen
+  (`ISSUE_NUMBER_TAKEN` si ya es de otro) y deja `next_issue_number` mayor;
+  actualiza pisando título, descripción, prioridad y categoría (al primer
+  estado de la categoría; salir de `CANCELED` borra el motivo), y solo las
+  etiquetas que puso el importador (`issue_labels.imported`): las puestas a
+  mano no se tocan (decisión de Victor, plan del 025). Número distinto del
+  guardado → `IMPORT_NUMBER_MISMATCH`. Sin cambios no escribe
+  (`UNCHANGED`). El importador de Round está en `tools/import-round`.
 - `rank`: *fractional indexing* (`model/rank.go`, port de `fractional-indexing`
   de rocicorp): base 62, se compara byte a byte (columna `COLLATE "C"`), entre
   dos claves siempre hay otra (`model.RankBetween`, para reordenar en la
@@ -196,7 +244,8 @@ compose, ver `cli/healthcheck.go`) y reflection fuera de prod.
   `state` texto `todo|in_progress|done|canceled` y `priority` 1..4, ambos con
   `CHECK`; `rank` `TEXT COLLATE "C"`; `discard_*` del descarte),
   `issues.statuses` (`color` 1..7, `wip_limit` ≥ 0, `hidden`), `issues.labels`,
-  `issues.issue_labels`, `issues.comments` e `issues.issue_events`. Timestamps
+  `issues.issue_labels` (`imported`), `issues.comments`, `issues.issue_events`
+  (`agent_id`), `issues.actors` e `issues.tokens` (solo el hash). Timestamps
   truncados a microsegundos en el repo (`dbNow`).
 - JSONB: DTOs unexported separados del dominio + `encoding/json`.
 - Migraciones en `migrations/NNNNNN_desc.{up,down}.sql`, aplicadas a mano
@@ -204,7 +253,10 @@ compose, ver `cli/healthcheck.go`) y reflection fuera de prod.
   `000001` crea el schema, `000002` las tablas de la rebanada 1 y `000003` las
   de la 3a con backfill (estados de cada proyecto, `status_id` de cada issue y
   el evento «creado»), y `000004` las de 011 a 013 (descarte, `search_fold`,
-  índices de los órdenes, color/WIP/visibilidad con backfill por categoría). El `docker-compose.yml` local las aplica
+  índices de los órdenes, color/WIP/visibilidad con backfill por categoría) y
+  `000005` las del 025 (actores, tokens, asignado, clave de origen,
+  `agent_id` y `imported`; solo columnas nullable salvo `imported`, con
+  `DEFAULT false`, que es lo que son todas las etiquetas existentes). El `docker-compose.yml` local las aplica
   solo al crear el volumen (`docker compose down -v` para empezar de cero).
 - Copiar los datos del servicio entre dos Postgres (con verificación de filas):
   `scripts/migrate_db.sh SRC_URL DST_URL` (dry-run; `--apply` para ejecutar).
@@ -223,6 +275,8 @@ make vuln                     # govulncheck (también corre en el CI)
 make build                    # bin/issues-service
 go mod tidy                   # después de tocar imports
 make workspace / workspace-off  # co-desarrollar con un checkout local de los protos
+go run ./tools/import-round -dry-run   # importador de Round: solo lee y reporta
+go run ./tools/import-round -user <uid> -addr localhost:5000 -create-project   # importa a RND
 grpcurl -plaintext localhost:5000 list   # con reflection (no prod)
 grpcurl -plaintext -H 'x-user-id: u1' -d '{"key":"TK","name":"Tekitla"}'   localhost:5000 issues.v1.IssueService/CreateProject
 # sin grpcurl local: docker run --rm --network issues-service_default #   fullstorydev/grpcurl:v1.9.3 -plaintext app:5000 list
@@ -252,7 +306,8 @@ git tag prod-v0.1.0 && git push origin prod-v0.1.0   # prod, automático salvo m
 - `000003` no es compatible con el binario anterior (exige `status_id` y estados
   por proyecto) y `000004` tampoco (estados sin DEFAULT de color, WIP y
   visibilidad): se aplica y se despliega la imagen nueva en seguida, sin
-  tráfico de por medio.
+  tráfico de por medio. `000005` sí es compatible con el binario de v0.4: se
+  puede aplicar antes del deploy.
 - Release con cambios en `migrations/`: la guarda de prod bloquea. Aplicar el
   SQL por túnel SSH (`scripts/apply_migration.sh prod <migración> --apply`) y
   lanzar el override.
@@ -264,7 +319,7 @@ git tag prod-v0.1.0 && git push origin prod-v0.1.0   # prod, automático salvo m
 
 ## Protos
 
-Repo de protos: `github.com/tekitla/tekitla-protos`, hoy en `v0.4.0`
+Repo de protos: `github.com/tekitla/tekitla-protos`, hoy en `v0.5.0`
 (`go.mod`). Paquete Go `github.com/tekitla/tekitla-protos/gen/go/issues/v1`
 (alias `issuesv1`), usado solo en `handler/`, `mapper/` y `cli/main.go`.
 

@@ -241,6 +241,12 @@ func IsValidation(err error) bool { return hasCode(err, codes.InvalidArgument) }
 // IsFailedPrecondition reporta si err es un FailedPreconditionError.
 func IsFailedPrecondition(err error) bool { return hasCode(err, codes.FailedPrecondition) }
 
+// IsUnauthorized reporta si err es un UnauthorizedError.
+func IsUnauthorized(err error) bool { return hasCode(err, codes.Unauthenticated) }
+
+// IsPermissionDenied reporta si err es un PermissionDeniedError.
+func IsPermissionDenied(err error) bool { return hasCode(err, codes.PermissionDenied) }
+
 // IsInternal reporta si err es un InternalError.
 func IsInternal(err error) bool { return hasCode(err, codes.Internal) }
 

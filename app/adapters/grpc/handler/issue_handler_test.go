@@ -43,6 +43,8 @@ type memStore struct {
 	statuses   []*model.Status
 	labels     []*model.Label
 	events     []*model.IssueEvent
+	actors     []*model.Actor
+	tokens     []*memToken
 }
 
 func newMemStore() *memStore {
@@ -128,7 +130,7 @@ func (s memProjects) List(_ context.Context, workspaceIDs []string, _ port.PageF
 	return page, nil
 }
 
-func (s memIssues) Create(_ context.Context, workspaceIDs []string, issue *model.Issue, actorUID string) (*model.Issue, error) {
+func (s memIssues) Create(_ context.Context, workspaceIDs []string, issue *model.Issue, author model.Author) (*model.Issue, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if p, ok := s.projects[issue.ProjectID]; !ok || !slices.Contains(workspaceIDs, p.WorkspaceID) {
@@ -150,7 +152,7 @@ func (s memIssues) Create(_ context.Context, workspaceIDs []string, issue *model
 	issue.CreatedAt, issue.UpdatedAt = time.Now(), time.Now()
 	issue.LabelIDs = []string{}
 	s.issues = append(s.issues, issue)
-	s.addEvent(issue.ID, actorUID, &model.IssueEvent{Kind: model.EventCreated})
+	s.addEvent(issue.ID, author, &model.IssueEvent{Kind: model.EventCreated})
 	return issue, nil
 }
 
@@ -187,20 +189,37 @@ func (s memIssues) List(_ context.Context, f port.IssueFilter) (*port.IssuePage,
 
 func newClient(t *testing.T) issuesv1.IssueServiceClient {
 	t.Helper()
+	return newClients(t).issues
+}
+
+// clients son los tres servicios del micro sobre el mismo store.
+type clients struct {
+	issues issuesv1.IssueServiceClient
+	actors issuesv1.ActorServiceClient
+	auth   issuesv1.TokenAuthServiceClient
+	store  *memStore
+}
+
+func newClients(t *testing.T) clients {
+	t.Helper()
 
 	store := newMemStore()
 	workspaces, projects, issues := memWorkspaces{store}, memProjects{store}, memIssues{store}
 	statuses, labels := memStatuses{store}, memLabels{store}
+	actors, tokens := memActors{store}, memTokens{store}
+	actorSvc := application.NewActorService(actors, tokens)
 	h := handler.NewIssueHandler(zap.NewNop(),
 		application.NewProjectService(workspaces, projects),
-		application.NewIssueService(workspaces, projects, issues, statuses, labels),
-		application.NewStatusService(workspaces, projects, statuses),
+		application.NewIssueService(workspaces, projects, issues, statuses, labels, actors),
+		application.NewStatusService(workspaces, projects, statuses, actors),
 		application.NewLabelService(workspaces, projects, labels),
 	)
 
 	lis := bufconn.Listen(1 << 20)
 	srv := grpc.NewServer()
 	issuesv1.RegisterIssueServiceServer(srv, h)
+	issuesv1.RegisterActorServiceServer(srv, handler.NewActorHandler(zap.NewNop(), actorSvc))
+	issuesv1.RegisterTokenAuthServiceServer(srv, handler.NewTokenAuthHandler(zap.NewNop(), actorSvc))
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
 
@@ -212,7 +231,12 @@ func newClient(t *testing.T) issuesv1.IssueServiceClient {
 		t.Fatalf("dial: %v", err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	return issuesv1.NewIssueServiceClient(conn)
+	return clients{
+		issues: issuesv1.NewIssueServiceClient(conn),
+		actors: issuesv1.NewActorServiceClient(conn),
+		auth:   issuesv1.NewTokenAuthServiceClient(conn),
+		store:  store,
+	}
 }
 
 // asUser devuelve un context con la metadata que pondría el gateway.

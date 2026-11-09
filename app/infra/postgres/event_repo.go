@@ -36,6 +36,7 @@ type eventRow struct {
 	Seq              int64
 	IssueID          string
 	ActorUID         string
+	AgentID          *string
 	Kind             string
 	Data             []byte
 	CreatedAt        time.Time
@@ -83,6 +84,13 @@ type labelsChangeData struct {
 	Removed []labelRef `json:"removed"`
 }
 
+type assigneeChangeData struct {
+	FromActorID     string `json:"from_actor_id"`
+	FromDisplayName string `json:"from_display_name"`
+	ToActorID       string `json:"to_actor_id"`
+	ToDisplayName   string `json:"to_display_name"`
+}
+
 // eventCursor: orden (seq ASC); seq es único.
 type eventCursor struct {
 	Seq int64 `json:"s"`
@@ -90,7 +98,7 @@ type eventCursor struct {
 
 // insertEvent guarda un evento del issue. El comentario, si lo hay, ya tiene
 // que estar insertado.
-func insertEvent(tx *gorm.DB, issueID, actorUID string, ev *model.IssueEvent, at time.Time) error {
+func insertEvent(tx *gorm.DB, issueID string, author model.Author, ev *model.IssueEvent, at time.Time) error {
 	data, err := eventData(ev)
 	if err != nil {
 		return err
@@ -100,10 +108,18 @@ func insertEvent(tx *gorm.DB, issueID, actorUID string, ev *model.IssueEvent, at
 		commentID = &ev.Comment.ID
 	}
 	return tx.Exec(
-		`INSERT INTO issues.issue_events (id, issue_id, actor_uid, kind, data, comment_id, created_at)
-		 VALUES (?, ?, ?, ?, ?::jsonb, ?, ?)`,
-		uuid.NewString(), issueID, actorUID, string(ev.Kind), string(data), commentID, at,
+		`INSERT INTO issues.issue_events (id, issue_id, actor_uid, agent_id, kind, data, comment_id, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?::jsonb, ?, ?)`,
+		uuid.NewString(), issueID, author.UserID, agentIDOrNil(author), string(ev.Kind), string(data), commentID, at,
 	).Error
+}
+
+// agentIDOrNil: agent_id es NULL cuando el cambio lo hizo la persona.
+func agentIDOrNil(author model.Author) *string {
+	if author.AgentID == "" {
+		return nil
+	}
+	return &author.AgentID
 }
 
 func eventData(ev *model.IssueEvent) ([]byte, error) {
@@ -119,6 +135,9 @@ func eventData(ev *model.IssueEvent) ([]byte, error) {
 		v = priorityChangeData{From: int(ev.Priority.From), To: int(ev.Priority.To)}
 	case model.EventLabelsChanged:
 		v = labelsChangeData{Added: labelRefs(ev.Labels.Added), Removed: labelRefs(ev.Labels.Removed)}
+	case model.EventAssigneeChanged:
+		c := ev.Assignee
+		v = assigneeChangeData{FromActorID: c.FromID, FromDisplayName: c.FromName, ToActorID: c.ToID, ToDisplayName: c.ToName}
 	}
 	return json.Marshal(v)
 }
@@ -155,6 +174,9 @@ func fromEventRow(r *eventRow) (*model.IssueEvent, error) {
 		Kind:      model.EventKind(r.Kind),
 		CreatedAt: r.CreatedAt,
 	}
+	if r.AgentID != nil {
+		ev.AgentID = *r.AgentID
+	}
 	var err error
 	switch ev.Kind {
 	case model.EventStatusChanged, model.EventRestored:
@@ -177,6 +199,10 @@ func fromEventRow(r *eventRow) (*model.IssueEvent, error) {
 		var d labelsChangeData
 		err = json.Unmarshal(r.Data, &d)
 		ev.Labels = &model.LabelsChange{Added: refsToLabels(d.Added), Removed: refsToLabels(d.Removed)}
+	case model.EventAssigneeChanged:
+		var d assigneeChangeData
+		err = json.Unmarshal(r.Data, &d)
+		ev.Assignee = &model.AssigneeChange{FromID: d.FromActorID, FromName: d.FromDisplayName, ToID: d.ToActorID, ToName: d.ToDisplayName}
 	case model.EventCommented:
 		if r.CommentID == nil || r.CommentBody == nil || r.CommentAuthorUID == nil || r.CommentCreatedAt == nil {
 			return nil, fmt.Errorf("event %s: comment missing", r.ID)
@@ -267,7 +293,7 @@ func attachLabels(db *gorm.DB, issues []*model.Issue) error {
 // Move pasa el issue a target y, si place no es cero, lo reubica entre sus
 // vecinos. Toma el lock del proyecto (los ranks se calculan contra todo el
 // orden del proyecto) y el del issue.
-func (r *IssueRepository) Move(ctx context.Context, projectID string, number int32, target *model.Status, place port.Placement, actorUID string) (*model.Issue, error) {
+func (r *IssueRepository) Move(ctx context.Context, projectID string, number int32, target *model.Status, place port.Placement, author model.Author) (*model.Issue, error) {
 	details := map[string]any{"project_id": projectID, "number": number}
 	var out *model.Issue
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -315,7 +341,7 @@ func (r *IssueRepository) Move(ctx context.Context, projectID string, number int
 				return err
 			}
 			ev := &model.IssueEvent{Kind: model.EventStatusChanged, Status: model.NewStatusChange(fromStatusRow(from), target)}
-			if err := insertEvent(tx, cur.ID, actorUID, ev, now); err != nil {
+			if err := insertEvent(tx, cur.ID, author, ev, now); err != nil {
 				return err
 			}
 		}
@@ -415,7 +441,7 @@ func firstOr(keys []string, def string) string {
 }
 
 // Update aplica el patch y registra un evento por cada cambio real.
-func (r *IssueRepository) Update(ctx context.Context, projectID string, number int32, patch model.IssuePatch, actorUID string) (*model.Issue, error) {
+func (r *IssueRepository) Update(ctx context.Context, projectID string, number int32, patch model.IssuePatch, author model.Author) (*model.Issue, error) {
 	details := map[string]any{"project_id": projectID, "number": number}
 	var out *model.Issue
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -453,13 +479,18 @@ func (r *IssueRepository) Update(ctx context.Context, projectID string, number i
 				if err := replaceLabels(tx, cur.ID, ev.Labels); err != nil {
 					return err
 				}
+			case model.EventAssigneeChanged:
+				updates["assignee_actor_id"] = nilIfEmpty(ev.Assignee.ToID)
+				if err := fillAssigneeNames(tx, ev.Assignee); err != nil {
+					return err
+				}
 			}
 		}
 		if err := tx.Model(&issueRow{}).Where("id = ?", cur.ID).Updates(updates).Error; err != nil {
 			return err
 		}
 		for _, ev := range events {
-			if err := insertEvent(tx, cur.ID, actorUID, ev, now); err != nil {
+			if err := insertEvent(tx, cur.ID, author, ev, now); err != nil {
 				return err
 			}
 		}
@@ -483,7 +514,7 @@ func replaceLabels(tx *gorm.DB, issueID string, change *model.LabelsChange) erro
 		}
 	}
 	for _, l := range change.Added {
-		if err := tx.Exec(`INSERT INTO issues.issue_labels (issue_id, label_id) VALUES (?, ?)`, issueID, l.ID).Error; err != nil {
+		if err := tx.Exec(`INSERT INTO issues.issue_labels (issue_id, label_id, imported) VALUES (?, ?, false)`, issueID, l.ID).Error; err != nil {
 			return err
 		}
 	}
@@ -491,7 +522,7 @@ func replaceLabels(tx *gorm.DB, issueID string, change *model.LabelsChange) erro
 }
 
 // AddComment guarda el comentario y su evento.
-func (r *IssueRepository) AddComment(ctx context.Context, projectID string, number int32, comment *model.Comment) (*model.Comment, error) {
+func (r *IssueRepository) AddComment(ctx context.Context, projectID string, number int32, comment *model.Comment, author model.Author) (*model.Comment, error) {
 	details := map[string]any{"project_id": projectID, "number": number}
 	now := dbNow()
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -512,7 +543,7 @@ func (r *IssueRepository) AddComment(ctx context.Context, projectID string, numb
 		if err := tx.Create(row).Error; err != nil {
 			return err
 		}
-		return insertEvent(tx, comment.IssueID, comment.AuthorUID, &model.IssueEvent{Kind: model.EventCommented, Comment: comment}, now)
+		return insertEvent(tx, comment.IssueID, author, &model.IssueEvent{Kind: model.EventCommented, Comment: comment}, now)
 	})
 	if err != nil {
 		return nil, writeError(err, "issue", "comment", details)
@@ -542,7 +573,7 @@ func (r *IssueRepository) ListEvents(ctx context.Context, projectID string, numb
 	limit := int(page.Limit)
 	var rows []eventRow
 	err := db.Raw(
-		`SELECT e.id, e.seq, e.issue_id, e.actor_uid, e.kind, e.data, e.created_at,
+		`SELECT e.id, e.seq, e.issue_id, e.actor_uid, e.agent_id, e.kind, e.data, e.created_at,
 		        c.id AS comment_id, c.author_uid AS comment_author_uid, c.body AS comment_body,
 		        c.created_at AS comment_created_at
 		   FROM issues.issue_events e

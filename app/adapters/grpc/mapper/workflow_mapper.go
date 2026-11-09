@@ -127,6 +127,7 @@ func IssueEventToProto(m *model.IssueEvent) (*issuesv1.IssueEvent, error) {
 		Id:        m.ID,
 		IssueId:   m.IssueID,
 		ActorId:   m.ActorUID,
+		AgentId:   m.AgentID,
 		CreatedAt: TimestampToProto(m.CreatedAt),
 	}
 	switch m.Kind {
@@ -171,6 +172,12 @@ func IssueEventToProto(m *model.IssueEvent) (*issuesv1.IssueEvent, error) {
 		out.Change = &issuesv1.IssueEvent_Restored{Restored: &issuesv1.IssueRestored{
 			FromStatusId: c.FromID, FromStatusName: c.FromName,
 			ToStatusId: c.ToID, ToStatusName: c.ToName,
+		}}
+	case model.EventAssigneeChanged:
+		c := m.Assignee
+		out.Change = &issuesv1.IssueEvent_AssigneeChanged{AssigneeChanged: &issuesv1.AssigneeChanged{
+			FromActorId: c.FromID, FromDisplayName: c.FromName,
+			ToActorId: c.ToID, ToDisplayName: c.ToName,
 		}}
 	default:
 		return nil, fmt.Errorf("unknown event kind %q", m.Kind)

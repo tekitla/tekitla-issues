@@ -17,7 +17,7 @@ import (
 // estados de una vez). Mismo patrón que issue_handler.go.
 
 func (h *IssueHandler) UpdateIssue(ctx context.Context, req *issuesv1.UpdateIssueRequest) (*issuesv1.UpdateIssueResponse, error) {
-	uid, err := requireUserID(ctx)
+	who, err := requireAuthor(ctx)
 	if err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)
 	}
@@ -35,7 +35,11 @@ func (h *IssueHandler) UpdateIssue(ctx context.Context, req *issuesv1.UpdateIssu
 		ids := append([]string{}, req.GetLabels().GetIds()...)
 		in.LabelIDs = &ids
 	}
-	issue, err := h.issueSvc.UpdateIssue(ctx, uid, in)
+	if req.AssigneeActorId != nil {
+		id := req.GetAssigneeActorId()
+		in.AssigneeActorID = &id
+	}
+	issue, err := h.issueSvc.UpdateIssue(ctx, who, in)
 	if err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)
 	}
@@ -99,22 +103,22 @@ func (h *IssueHandler) UpdateStatus(ctx context.Context, req *issuesv1.UpdateSta
 }
 
 func (h *IssueHandler) DeleteStatus(ctx context.Context, req *issuesv1.DeleteStatusRequest) (*issuesv1.DeleteStatusResponse, error) {
-	uid, err := requireUserID(ctx)
+	who, err := requireAuthor(ctx)
 	if err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)
 	}
-	if err := h.statusSvc.DeleteStatus(ctx, uid, req.GetProjectId(), req.GetStatusId(), req.GetMoveToStatusId()); err != nil {
+	if err := h.statusSvc.DeleteStatus(ctx, who, req.GetProjectId(), req.GetStatusId(), req.GetMoveToStatusId()); err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)
 	}
 	return &issuesv1.DeleteStatusResponse{}, nil
 }
 
 func (h *IssueHandler) BatchUpdateStatuses(ctx context.Context, req *issuesv1.BatchUpdateStatusesRequest) (*issuesv1.BatchUpdateStatusesResponse, error) {
-	uid, err := requireUserID(ctx)
+	who, err := requireAuthor(ctx)
 	if err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)
 	}
-	statuses, err := h.statusSvc.BatchUpdateStatuses(ctx, uid, application.BatchUpdateStatusesInput{
+	statuses, err := h.statusSvc.BatchUpdateStatuses(ctx, who, application.BatchUpdateStatusesInput{
 		ProjectID: req.GetProjectId(),
 		Statuses:  mapper.StatusSpecsFromProto(req.GetStatuses()),
 		Deletions: mapper.StatusDeletionsFromProto(req.GetDeletions()),
@@ -126,11 +130,11 @@ func (h *IssueHandler) BatchUpdateStatuses(ctx context.Context, req *issuesv1.Ba
 }
 
 func (h *IssueHandler) DiscardIssue(ctx context.Context, req *issuesv1.DiscardIssueRequest) (*issuesv1.DiscardIssueResponse, error) {
-	uid, err := requireUserID(ctx)
+	who, err := requireAuthor(ctx)
 	if err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)
 	}
-	issue, err := h.issueSvc.DiscardIssue(ctx, uid, application.DiscardIssueInput{
+	issue, err := h.issueSvc.DiscardIssue(ctx, who, application.DiscardIssueInput{
 		ProjectID: req.GetProjectId(),
 		Number:    req.GetNumber(),
 		Reason:    req.GetReason(),
@@ -143,11 +147,11 @@ func (h *IssueHandler) DiscardIssue(ctx context.Context, req *issuesv1.DiscardIs
 }
 
 func (h *IssueHandler) RestoreIssue(ctx context.Context, req *issuesv1.RestoreIssueRequest) (*issuesv1.RestoreIssueResponse, error) {
-	uid, err := requireUserID(ctx)
+	who, err := requireAuthor(ctx)
 	if err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)
 	}
-	issue, err := h.issueSvc.RestoreIssue(ctx, uid, req.GetProjectId(), req.GetNumber())
+	issue, err := h.issueSvc.RestoreIssue(ctx, who, req.GetProjectId(), req.GetNumber())
 	if err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)
 	}
@@ -207,11 +211,11 @@ func (h *IssueHandler) DeleteLabel(ctx context.Context, req *issuesv1.DeleteLabe
 }
 
 func (h *IssueHandler) CreateComment(ctx context.Context, req *issuesv1.CreateCommentRequest) (*issuesv1.CreateCommentResponse, error) {
-	uid, err := requireUserID(ctx)
+	who, err := requireAuthor(ctx)
 	if err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)
 	}
-	comment, err := h.issueSvc.CreateComment(ctx, uid, req.GetProjectId(), req.GetNumber(), req.GetBody())
+	comment, err := h.issueSvc.CreateComment(ctx, who, req.GetProjectId(), req.GetNumber(), req.GetBody())
 	if err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)
 	}
@@ -238,4 +242,35 @@ func (h *IssueHandler) ListIssueEvents(ctx context.Context, req *issuesv1.ListIs
 		Events: events,
 		Page:   mapper.PageResponseToProto(page.NextCursor, page.HasNext),
 	}, nil
+}
+
+// ImportIssue crea o actualiza un issue importado de otro tracker (issue
+// 025). Solo para quien importa: el gateway no la expone, y un agente no la
+// puede usar.
+func (h *IssueHandler) ImportIssue(ctx context.Context, req *issuesv1.ImportIssueRequest) (*issuesv1.ImportIssueResponse, error) {
+	uid, err := requirePerson(ctx)
+	if err != nil {
+		return nil, domainerrors.MapToGRPC(err, h.logger)
+	}
+	in := application.ImportIssueInput{
+		ProjectID:   req.GetProjectId(),
+		SourceKey:   req.GetSourceKey(),
+		Number:      req.GetNumber(),
+		Title:       req.GetTitle(),
+		Description: req.GetDescription(),
+		Priority:    mapper.PriorityFromProto(req.GetPriority()),
+		State:       mapper.IssueStateFromProto(req.GetState()),
+		LabelNames:  req.GetLabelNames(),
+	}
+	if req.CreatedAt != nil {
+		if err := req.GetCreatedAt().CheckValid(); err != nil {
+			return nil, domainerrors.MapToGRPC(domainerrors.ValidationError("invalid created_at", map[string]any{"field": "created_at"}), h.logger)
+		}
+		in.CreatedAt = req.GetCreatedAt().AsTime()
+	}
+	issue, outcome, err := h.issueSvc.ImportIssue(ctx, model.Author{UserID: uid}, in)
+	if err != nil {
+		return nil, domainerrors.MapToGRPC(err, h.logger)
+	}
+	return &issuesv1.ImportIssueResponse{Issue: mapper.IssueToProto(issue), Outcome: mapper.ImportOutcomeToProto(outcome)}, nil
 }

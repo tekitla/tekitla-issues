@@ -28,14 +28,14 @@ type StatusRepository interface {
 	// como el de la categoría del estado.
 	Update(ctx context.Context, projectID, id string, patch StatusPatch) (*model.Status, error)
 	// Delete borra el estado y pasa sus issues a moveToID ("" solo si no tiene
-	// issues), registrando cada cambio a nombre de actorUID.
-	Delete(ctx context.Context, projectID, id, moveToID, actorUID string) error
+	// issues), registrando cada cambio a nombre de author.
+	Delete(ctx context.Context, projectID, id, moveToID string, author model.Author) error
 	// BatchUpdate guarda la lista completa de estados en una transacción, con
 	// el lock del proyecto: valida con model.PlanStatusBatch contra los
 	// estados actuales, borra (moviendo los issues, con su evento), actualiza
 	// y crea. FailedPrecondition (reason STATUS_HAS_ISSUES) si un estado
 	// borrado tiene issues y no tiene destino. Devuelve los estados por rank.
-	BatchUpdate(ctx context.Context, projectID string, specs []model.StatusSpec, deletions []model.StatusDeletion, actorUID string) ([]*model.Status, error)
+	BatchUpdate(ctx context.Context, projectID string, specs []model.StatusSpec, deletions []model.StatusDeletion, author model.Author) ([]*model.Status, error)
 }
 
 // StatusPatch son los cambios de UpdateStatus: nil = no cambia. AfterID

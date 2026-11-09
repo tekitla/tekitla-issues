@@ -17,7 +17,7 @@ import (
 
 // Discard pasa el issue a target (CANCELED) conservando su rank y guarda el
 // motivo.
-func (r *IssueRepository) Discard(ctx context.Context, projectID string, number int32, statusID, reason, actorUID string) (*model.Issue, error) {
+func (r *IssueRepository) Discard(ctx context.Context, projectID string, number int32, statusID, reason string, author model.Author) (*model.Issue, error) {
 	details := map[string]any{"project_id": projectID, "number": number}
 	var out *model.Issue
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -31,16 +31,16 @@ func (r *IssueRepository) Discard(ctx context.Context, projectID string, number 
 		now := dbNow()
 		if err := tx.Model(&issueRow{}).Where("id = ?", cur.ID).Updates(map[string]any{
 			"status_id": to.ID, "state": string(to.Category), "updated_at": now,
-			"discard_reason": reason, "discarded_by": actorUID, "discarded_at": now,
+			"discard_reason": reason, "discarded_by": author.UserID, "discarded_at": now,
 		}).Error; err != nil {
 			return err
 		}
 		ev := &model.IssueEvent{Kind: model.EventDiscarded, Status: model.NewStatusChange(from, to), Reason: reason}
-		if err := insertEvent(tx, cur.ID, actorUID, ev, now); err != nil {
+		if err := insertEvent(tx, cur.ID, author, ev, now); err != nil {
 			return err
 		}
 		cur.StatusID, cur.State, cur.UpdatedAt = to.ID, to.Category, now
-		cur.Discard = &model.DiscardInfo{Reason: reason, ActorUID: actorUID, DiscardedAt: now}
+		cur.Discard = &model.DiscardInfo{Reason: reason, ActorUID: author.UserID, DiscardedAt: now}
 		out = cur
 		return nil
 	})
@@ -52,7 +52,7 @@ func (r *IssueRepository) Discard(ctx context.Context, projectID string, number 
 
 // Restore pasa el issue a target (TODO), al final de esa columna, y borra el
 // motivo del descarte.
-func (r *IssueRepository) Restore(ctx context.Context, projectID string, number int32, actorUID string) (*model.Issue, error) {
+func (r *IssueRepository) Restore(ctx context.Context, projectID string, number int32, author model.Author) (*model.Issue, error) {
 	details := map[string]any{"project_id": projectID, "number": number}
 	var out *model.Issue
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -74,7 +74,7 @@ func (r *IssueRepository) Restore(ctx context.Context, projectID string, number 
 			return err
 		}
 		ev := &model.IssueEvent{Kind: model.EventRestored, Status: model.NewStatusChange(from, to)}
-		if err := insertEvent(tx, cur.ID, actorUID, ev, now); err != nil {
+		if err := insertEvent(tx, cur.ID, author, ev, now); err != nil {
 			return err
 		}
 		cur.StatusID, cur.State, cur.Rank, cur.UpdatedAt, cur.Discard = to.ID, to.Category, rank, now, nil

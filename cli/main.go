@@ -49,21 +49,29 @@ func main() {
 	issueRepo := postgres.NewIssueRepository(infra.DB)
 	statusRepo := postgres.NewStatusRepository(infra.DB)
 	labelRepo := postgres.NewLabelRepository(infra.DB)
+	actorRepo := postgres.NewActorRepository(infra.DB)
+	tokenRepo := postgres.NewTokenRepository(infra.DB)
 
 	// 4. Servicios de aplicación
 	projectSvc := application.NewProjectService(workspaceRepo, projectRepo)
-	issueSvc := application.NewIssueService(workspaceRepo, projectRepo, issueRepo, statusRepo, labelRepo)
-	statusSvc := application.NewStatusService(workspaceRepo, projectRepo, statusRepo)
+	issueSvc := application.NewIssueService(workspaceRepo, projectRepo, issueRepo, statusRepo, labelRepo, actorRepo)
+	statusSvc := application.NewStatusService(workspaceRepo, projectRepo, statusRepo, actorRepo)
 	labelSvc := application.NewLabelService(workspaceRepo, projectRepo, labelRepo)
+	actorSvc := application.NewActorService(actorRepo, tokenRepo)
 
 	// 5. Handlers gRPC
 	issueHandler := handler.NewIssueHandler(infra.Logger, projectSvc, issueSvc, statusSvc, labelSvc)
+	actorHandler := handler.NewActorHandler(infra.Logger, actorSvc)
+	tokenAuthHandler := handler.NewTokenAuthHandler(infra.Logger, actorSvc)
 
 	// 6. Servidor gRPC
 	grpcServer := grpc.NewServer(
 		grpc.UnaryInterceptor(interceptor.UnaryLogger(infra.Logger, infra.Config.Debug)),
 	)
 	issuesv1.RegisterIssueServiceServer(grpcServer, issueHandler)
+	issuesv1.RegisterActorServiceServer(grpcServer, actorHandler)
+	// Interno: lo llama solo el gateway (el servicio no tiene puerto publicado).
+	issuesv1.RegisterTokenAuthServiceServer(grpcServer, tokenAuthHandler)
 
 	// Health: lo usan los probes de Cloud Run y el healthcheck de docker compose.
 	healthSrv := health.NewServer()

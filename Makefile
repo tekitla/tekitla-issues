@@ -39,11 +39,11 @@ vet:
 
 ## fmt: formatea el código
 fmt:
-	gofmt -w app cli
+	gofmt -w app cli tools
 
 ## lint: gofmt (check) + go vet + golangci-lint si está instalado
 lint: vet
-	@out="$$(gofmt -l app cli)"; if [ -n "$$out" ]; then echo "gofmt pendiente en:"; echo "$$out"; exit 1; fi
+	@out="$$(gofmt -l app cli tools)"; if [ -n "$$out" ]; then echo "gofmt pendiente en:"; echo "$$out"; exit 1; fi
 	@if command -v golangci-lint >/dev/null 2>&1; then golangci-lint run ./...; else echo "golangci-lint no instalado: solo gofmt + vet"; fi
 
 ## vuln: govulncheck (vulnerabilidades alcanzables en dependencias y stdlib)

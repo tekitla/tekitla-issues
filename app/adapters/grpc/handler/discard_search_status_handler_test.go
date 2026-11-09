@@ -35,13 +35,18 @@ func memMatches(it *model.Issue, f port.IssueFilter) bool {
 	if len(f.LabelIDs) > 0 && !slices.ContainsFunc(it.LabelIDs, func(id string) bool { return slices.Contains(f.LabelIDs, id) }) {
 		return false
 	}
+	if len(f.AssigneeActorIDs) > 0 || f.Unassigned {
+		if !slices.Contains(f.AssigneeActorIDs, it.AssigneeActorID) && !(f.Unassigned && it.AssigneeActorID == "") {
+			return false
+		}
+	}
 	if s := f.Search; s.Text != "" {
 		return strings.Contains(strings.ToLower(it.Title), strings.ToLower(s.Text)) || (s.Number > 0 && it.Number == s.Number)
 	}
 	return true
 }
 
-func (s memIssues) Discard(_ context.Context, projectID string, number int32, statusID, reason, actor string) (*model.Issue, error) {
+func (s memIssues) Discard(_ context.Context, projectID string, number int32, statusID, reason string, author model.Author) (*model.Issue, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	target := s.status(projectID, statusID)
@@ -56,13 +61,13 @@ func (s memIssues) Discard(_ context.Context, projectID string, number int32, st
 		return nil, domainerrors.FailedPreconditionError("issue is already discarded", nil).WithReason("ISSUE_ALREADY_DISCARDED")
 	}
 	from := s.status(projectID, it.StatusID)
-	s.addEvent(it.ID, actor, &model.IssueEvent{Kind: model.EventDiscarded, Status: model.NewStatusChange(from, target), Reason: reason})
+	s.addEvent(it.ID, author, &model.IssueEvent{Kind: model.EventDiscarded, Status: model.NewStatusChange(from, target), Reason: reason})
 	it.StatusID, it.State = target.ID, target.Category
-	it.Discard = &model.DiscardInfo{Reason: reason, ActorUID: actor}
+	it.Discard = &model.DiscardInfo{Reason: reason, ActorUID: author.UserID}
 	return it, nil
 }
 
-func (s memIssues) Restore(_ context.Context, projectID string, number int32, actor string) (*model.Issue, error) {
+func (s memIssues) Restore(_ context.Context, projectID string, number int32, author model.Author) (*model.Issue, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	target := model.FirstStatusOf(s.projectStatuses(projectID), model.IssueStateTodo)
@@ -74,12 +79,12 @@ func (s memIssues) Restore(_ context.Context, projectID string, number int32, ac
 		return nil, domainerrors.FailedPreconditionError("issue is not discarded", nil).WithReason("ISSUE_NOT_DISCARDED")
 	}
 	from := s.status(projectID, it.StatusID)
-	s.addEvent(it.ID, actor, &model.IssueEvent{Kind: model.EventRestored, Status: model.NewStatusChange(from, target)})
+	s.addEvent(it.ID, author, &model.IssueEvent{Kind: model.EventRestored, Status: model.NewStatusChange(from, target)})
 	it.StatusID, it.State, it.Discard = target.ID, target.Category, nil
 	return it, nil
 }
 
-func (s memStatuses) BatchUpdate(_ context.Context, projectID string, specs []model.StatusSpec, deletions []model.StatusDeletion, actor string) ([]*model.Status, error) {
+func (s memStatuses) BatchUpdate(_ context.Context, projectID string, specs []model.StatusSpec, deletions []model.StatusDeletion, author model.Author) ([]*model.Status, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	plan, err := model.PlanStatusBatch(s.projectStatuses(projectID), specs, deletions, uuid.NewString)
@@ -103,7 +108,7 @@ func (s memStatuses) BatchUpdate(_ context.Context, projectID string, specs []mo
 			if to == nil {
 				return nil, domainerrors.FailedPreconditionError("status has issues", nil).WithReason("STATUS_HAS_ISSUES")
 			}
-			s.addEvent(it.ID, actor, &model.IssueEvent{Kind: model.EventStatusChanged, Status: model.NewStatusChange(from, to)})
+			s.addEvent(it.ID, author, &model.IssueEvent{Kind: model.EventStatusChanged, Status: model.NewStatusChange(from, to)})
 			it.StatusID, it.State = to.ID, to.Category
 		}
 	}

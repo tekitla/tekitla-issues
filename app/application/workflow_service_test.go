@@ -33,7 +33,7 @@ func projectLabels() *mockLabelRepo {
 }
 
 func svcWith(issues *mockIssueRepo, statuses *mockStatusRepo, labels *mockLabelRepo) *application.IssueService {
-	return application.NewIssueService(personalWorkspaces(), ownedProjects(), issues, statuses, labels)
+	return application.NewIssueService(personalWorkspaces(), ownedProjects(), issues, statuses, labels, &mockActorRepo{})
 }
 
 // ================================================================
@@ -44,16 +44,16 @@ func TestMoveIssue_ByStatusID(t *testing.T) {
 	var gotTarget *model.Status
 	var gotPlace port.Placement
 	issues := &mockIssueRepo{
-		moveFn: func(_ context.Context, _ string, number int32, target *model.Status, place port.Placement, actor string) (*model.Issue, error) {
+		moveFn: func(_ context.Context, _ string, number int32, target *model.Status, place port.Placement, author model.Author) (*model.Issue, error) {
 			gotTarget, gotPlace = target, place
-			if actor != owner {
-				t.Errorf("actor: got %q", actor)
+			if author.UserID != owner {
+				t.Errorf("actor: got %q", author.UserID)
 			}
 			return &model.Issue{Number: number, StatusID: target.ID, State: target.Category}, nil
 		},
 	}
 	place := port.Placement{AfterNumber: 4, BeforeNumber: 7}
-	_, err := svcWith(issues, projectStatuses(stReview), &mockLabelRepo{}).MoveIssue(context.Background(), owner, application.MoveIssueInput{
+	_, err := svcWith(issues, projectStatuses(stReview), &mockLabelRepo{}).MoveIssue(context.Background(), as(owner), application.MoveIssueInput{
 		ProjectID: validID, Number: 3, StatusID: stReview.ID, State: model.IssueStateDone, Place: place,
 	})
 	if err != nil {
@@ -68,7 +68,7 @@ func TestMoveIssue_ByStatusID(t *testing.T) {
 func TestMoveIssue_UnknownStatusIsValidation(t *testing.T) {
 	svc := svcWith(failIssueRepo(t), projectStatuses(), &mockLabelRepo{})
 	for _, id := range []string{"not-a-uuid", stReview.ID} {
-		_, err := svc.MoveIssue(context.Background(), owner, application.MoveIssueInput{ProjectID: validID, Number: 1, StatusID: id})
+		_, err := svc.MoveIssue(context.Background(), as(owner), application.MoveIssueInput{ProjectID: validID, Number: 1, StatusID: id})
 		if !domainerrors.IsValidation(err) {
 			t.Errorf("status_id %q: expected ValidationError, got %v", id, err)
 		}
@@ -84,12 +84,12 @@ func TestMoveIssue_SameCategoryKeepsStatus(t *testing.T) {
 		getByNumberFn: func(_ context.Context, _ string, number int32) (*model.Issue, error) {
 			return &model.Issue{Number: number, State: model.IssueStateInProgress, StatusID: stReview.ID}, nil
 		},
-		moveFn: func(_ context.Context, _ string, number int32, target *model.Status, _ port.Placement, _ string) (*model.Issue, error) {
+		moveFn: func(_ context.Context, _ string, number int32, target *model.Status, _ port.Placement, _ model.Author) (*model.Issue, error) {
 			gotTarget = target
 			return &model.Issue{Number: number}, nil
 		},
 	}
-	_, err := svcWith(issues, projectStatuses(stReview), &mockLabelRepo{}).MoveIssue(context.Background(), owner, application.MoveIssueInput{
+	_, err := svcWith(issues, projectStatuses(stReview), &mockLabelRepo{}).MoveIssue(context.Background(), as(owner), application.MoveIssueInput{
 		ProjectID: validID, Number: 2, State: model.IssueStateInProgress,
 	})
 	if err != nil {
@@ -107,7 +107,7 @@ func TestMoveIssue_InvalidPlacement(t *testing.T) {
 		"itself":     {BeforeNumber: 3},
 		"same twice": {AfterNumber: 5, BeforeNumber: 5},
 	} {
-		_, err := svc.MoveIssue(context.Background(), owner, application.MoveIssueInput{
+		_, err := svc.MoveIssue(context.Background(), as(owner), application.MoveIssueInput{
 			ProjectID: validID, Number: 3, StatusID: stDoing.ID, Place: place,
 		})
 		if !domainerrors.IsValidation(err) {
@@ -118,11 +118,11 @@ func TestMoveIssue_InvalidPlacement(t *testing.T) {
 
 func TestMoveIssue_PropagatesStaleOrder(t *testing.T) {
 	issues := &mockIssueRepo{
-		moveFn: func(context.Context, string, int32, *model.Status, port.Placement, string) (*model.Issue, error) {
+		moveFn: func(context.Context, string, int32, *model.Status, port.Placement, model.Author) (*model.Issue, error) {
 			return nil, domainerrors.FailedPreconditionError("neighbors are out of order", nil).WithReason("STALE_ORDER")
 		},
 	}
-	_, err := svcWith(issues, projectStatuses(), &mockLabelRepo{}).MoveIssue(context.Background(), owner, application.MoveIssueInput{
+	_, err := svcWith(issues, projectStatuses(), &mockLabelRepo{}).MoveIssue(context.Background(), as(owner), application.MoveIssueInput{
 		ProjectID: validID, Number: 3, StatusID: stDoing.ID, Place: port.Placement{AfterNumber: 1},
 	})
 	if !domainerrors.IsFailedPrecondition(err) {
@@ -139,15 +139,15 @@ func ptr[T any](v T) *T { return &v }
 func TestUpdateIssue_BuildsNormalizedPatch(t *testing.T) {
 	var got model.IssuePatch
 	issues := &mockIssueRepo{
-		updateFn: func(_ context.Context, _ string, number int32, patch model.IssuePatch, actor string) (*model.Issue, error) {
+		updateFn: func(_ context.Context, _ string, number int32, patch model.IssuePatch, author model.Author) (*model.Issue, error) {
 			got = patch
-			if actor != owner {
-				t.Errorf("actor: got %q", actor)
+			if author.UserID != owner {
+				t.Errorf("actor: got %q", author.UserID)
 			}
 			return &model.Issue{Number: number}, nil
 		},
 	}
-	_, err := svcWith(issues, projectStatuses(), projectLabels()).UpdateIssue(context.Background(), owner, application.UpdateIssueInput{
+	_, err := svcWith(issues, projectStatuses(), projectLabels()).UpdateIssue(context.Background(), as(owner), application.UpdateIssueInput{
 		ProjectID: validID,
 		Number:    1,
 		Title:     ptr("  Nuevo título "),
@@ -174,7 +174,7 @@ func TestUpdateIssue_Validation(t *testing.T) {
 		"foreign label":    {LabelIDs: &[]string{labelFront, foreign}},
 	} {
 		in.ProjectID, in.Number = validID, 1
-		if _, err := svc.UpdateIssue(context.Background(), owner, in); !domainerrors.IsValidation(err) {
+		if _, err := svc.UpdateIssue(context.Background(), as(owner), in); !domainerrors.IsValidation(err) {
 			t.Errorf("%s: expected ValidationError, got %v", name, err)
 		}
 	}
@@ -183,12 +183,12 @@ func TestUpdateIssue_Validation(t *testing.T) {
 func TestUpdateIssue_EmptyPatchReturnsIssue(t *testing.T) {
 	issues := &mockIssueRepo{
 		getByNumberFn: todoIssue,
-		updateFn: func(context.Context, string, int32, model.IssuePatch, string) (*model.Issue, error) {
+		updateFn: func(context.Context, string, int32, model.IssuePatch, model.Author) (*model.Issue, error) {
 			t.Fatal("update must not be called without changes")
 			return nil, nil
 		},
 	}
-	got, err := svcWith(issues, projectStatuses(), projectLabels()).UpdateIssue(context.Background(), owner, application.UpdateIssueInput{ProjectID: validID, Number: 4})
+	got, err := svcWith(issues, projectStatuses(), projectLabels()).UpdateIssue(context.Background(), as(owner), application.UpdateIssueInput{ProjectID: validID, Number: 4})
 	if err != nil || got.Number != 4 {
 		t.Fatalf("got %+v, err %v", got, err)
 	}
@@ -198,7 +198,7 @@ func TestUpdateIssue_EmptyPatchReturnsIssue(t *testing.T) {
 func TestUpdateIssue_ClearLabels(t *testing.T) {
 	var got model.IssuePatch
 	issues := &mockIssueRepo{
-		updateFn: func(_ context.Context, _ string, _ int32, patch model.IssuePatch, _ string) (*model.Issue, error) {
+		updateFn: func(_ context.Context, _ string, _ int32, patch model.IssuePatch, _ model.Author) (*model.Issue, error) {
 			got = patch
 			return &model.Issue{}, nil
 		},
@@ -207,7 +207,7 @@ func TestUpdateIssue_ClearLabels(t *testing.T) {
 		t.Fatal("no labels to validate")
 		return nil, nil
 	}}
-	if _, err := svcWith(issues, projectStatuses(), labels).UpdateIssue(context.Background(), owner, application.UpdateIssueInput{
+	if _, err := svcWith(issues, projectStatuses(), labels).UpdateIssue(context.Background(), as(owner), application.UpdateIssueInput{
 		ProjectID: validID, Number: 1, LabelIDs: &[]string{},
 	}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -224,19 +224,19 @@ func TestUpdateIssue_ClearLabels(t *testing.T) {
 func TestCreateComment(t *testing.T) {
 	var got *model.Comment
 	issues := &mockIssueRepo{
-		addCommentFn: func(_ context.Context, _ string, _ int32, c *model.Comment) (*model.Comment, error) {
+		addCommentFn: func(_ context.Context, _ string, _ int32, c *model.Comment, author model.Author) (*model.Comment, error) {
 			got = c
 			return c, nil
 		},
 	}
 	svc := svcWith(issues, projectStatuses(), &mockLabelRepo{})
-	if _, err := svc.CreateComment(context.Background(), owner, validID, 2, "  Listo para revisar "); err != nil {
+	if _, err := svc.CreateComment(context.Background(), as(owner), validID, 2, "  Listo para revisar "); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got.Body != "Listo para revisar" || got.AuthorUID != owner || got.ID == "" {
 		t.Errorf("comment: got %+v", got)
 	}
-	if _, err := svc.CreateComment(context.Background(), owner, validID, 2, "   "); !domainerrors.IsValidation(err) {
+	if _, err := svc.CreateComment(context.Background(), as(owner), validID, 2, "   "); !domainerrors.IsValidation(err) {
 		t.Errorf("empty body: expected ValidationError, got %v", err)
 	}
 }
@@ -261,15 +261,15 @@ func TestListIssueEvents_NormalizesLimit(t *testing.T) {
 func TestWorkflow_ForeignProjectIsNotFound(t *testing.T) {
 	ctx := context.Background()
 	issues := svcWith(failIssueRepo(t), &mockStatusRepo{}, &mockLabelRepo{})
-	statuses := application.NewStatusService(personalWorkspaces(), ownedProjects(), &mockStatusRepo{})
+	statuses := application.NewStatusService(personalWorkspaces(), ownedProjects(), &mockStatusRepo{}, &mockActorRepo{})
 	labels := application.NewLabelService(personalWorkspaces(), ownedProjects(), &mockLabelRepo{})
 
 	checks := map[string]error{}
-	_, checks["UpdateIssue"] = issues.UpdateIssue(ctx, otherOwner, application.UpdateIssueInput{ProjectID: validID, Number: 1, Title: ptr("x")})
-	_, checks["CreateComment"] = issues.CreateComment(ctx, otherOwner, validID, 1, "x")
+	_, checks["UpdateIssue"] = issues.UpdateIssue(ctx, as(otherOwner), application.UpdateIssueInput{ProjectID: validID, Number: 1, Title: ptr("x")})
+	_, checks["CreateComment"] = issues.CreateComment(ctx, as(otherOwner), validID, 1, "x")
 	_, checks["ListIssueEvents"] = issues.ListIssueEvents(ctx, otherOwner, validID, 1, port.PageFilter{})
 	_, checks["ListStatuses"] = statuses.ListStatuses(ctx, otherOwner, validID)
-	checks["DeleteStatus"] = statuses.DeleteStatus(ctx, otherOwner, validID, stDoing.ID, "")
+	checks["DeleteStatus"] = statuses.DeleteStatus(ctx, as(otherOwner), validID, stDoing.ID, "")
 	_, checks["ListLabels"] = labels.ListLabels(ctx, otherOwner, validID)
 	checks["DeleteLabel"] = labels.DeleteLabel(ctx, otherOwner, validID, labelFront)
 	for name, err := range checks {
@@ -292,7 +292,7 @@ func TestCreateStatus(t *testing.T) {
 			return s, nil
 		},
 	}
-	svc := application.NewStatusService(personalWorkspaces(), ownedProjects(), repo)
+	svc := application.NewStatusService(personalWorkspaces(), ownedProjects(), repo, &mockActorRepo{})
 	_, err := svc.CreateStatus(context.Background(), owner, application.CreateStatusInput{
 		ProjectID: validID, Name: " En revisión ", Category: model.IssueStateInProgress, AfterStatusID: stDoing.ID,
 	})
@@ -310,7 +310,7 @@ func TestCreateStatus_Validation(t *testing.T) {
 			t.Fatal("repo must not be called")
 			return nil, nil
 		},
-	})
+	}, &mockActorRepo{})
 	for name, in := range map[string]application.CreateStatusInput{
 		"empty name":       {Name: " ", Category: model.IssueStateTodo},
 		"no category":      {Name: "x"},
@@ -335,7 +335,7 @@ func TestUpdateStatus(t *testing.T) {
 			return &model.Status{ID: id, Name: "same"}, nil
 		},
 	}
-	svc := application.NewStatusService(personalWorkspaces(), ownedProjects(), repo)
+	svc := application.NewStatusService(personalWorkspaces(), ownedProjects(), repo, &mockActorRepo{})
 
 	// Al principio: after presente y vacío.
 	if _, err := svc.UpdateStatus(context.Background(), owner, application.UpdateStatusInput{
@@ -363,30 +363,30 @@ func TestUpdateStatus(t *testing.T) {
 func TestDeleteStatus(t *testing.T) {
 	var gotMove, gotActor string
 	repo := &mockStatusRepo{
-		deleteFn: func(_ context.Context, _, _, moveToID, actor string) error {
-			gotMove, gotActor = moveToID, actor
+		deleteFn: func(_ context.Context, _, _, moveToID string, author model.Author) error {
+			gotMove, gotActor = moveToID, author.UserID
 			return nil
 		},
 	}
-	svc := application.NewStatusService(personalWorkspaces(), ownedProjects(), repo)
-	if err := svc.DeleteStatus(context.Background(), owner, validID, stReview.ID, stDoing.ID); err != nil {
+	svc := application.NewStatusService(personalWorkspaces(), ownedProjects(), repo, &mockActorRepo{})
+	if err := svc.DeleteStatus(context.Background(), as(owner), validID, stReview.ID, stDoing.ID); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if gotMove != stDoing.ID || gotActor != owner {
 		t.Errorf("delete: move %q actor %q", gotMove, gotActor)
 	}
-	if err := svc.DeleteStatus(context.Background(), owner, validID, stReview.ID, stReview.ID); !domainerrors.IsValidation(err) {
+	if err := svc.DeleteStatus(context.Background(), as(owner), validID, stReview.ID, stReview.ID); !domainerrors.IsValidation(err) {
 		t.Errorf("move to itself: expected ValidationError, got %v", err)
 	}
 }
 
 func TestDeleteStatus_PropagatesLastOfCategory(t *testing.T) {
 	repo := &mockStatusRepo{
-		deleteFn: func(context.Context, string, string, string, string) error {
+		deleteFn: func(context.Context, string, string, string, model.Author) error {
 			return domainerrors.FailedPreconditionError("cannot delete the last status of its category", nil)
 		},
 	}
-	err := application.NewStatusService(personalWorkspaces(), ownedProjects(), repo).DeleteStatus(context.Background(), owner, validID, stTodo.ID, "")
+	err := application.NewStatusService(personalWorkspaces(), ownedProjects(), repo, &mockActorRepo{}).DeleteStatus(context.Background(), as(owner), validID, stTodo.ID, "")
 	if !domainerrors.IsFailedPrecondition(err) {
 		t.Fatalf("expected FailedPrecondition, got %v", err)
 	}
@@ -438,7 +438,7 @@ func TestCreateStatus_Defaults(t *testing.T) {
 		got = s
 		return s, nil
 	}}
-	svc := application.NewStatusService(personalWorkspaces(), ownedProjects(), repo)
+	svc := application.NewStatusService(personalWorkspaces(), ownedProjects(), repo, &mockActorRepo{})
 	if _, err := svc.CreateStatus(context.Background(), owner, application.CreateStatusInput{ProjectID: validID, Name: "Archivo", Category: model.IssueStateCanceled}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -471,7 +471,7 @@ func TestUpdateStatus_Settings(t *testing.T) {
 		got = patch
 		return &model.Status{ID: id}, nil
 	}}
-	svc := application.NewStatusService(personalWorkspaces(), ownedProjects(), repo)
+	svc := application.NewStatusService(personalWorkspaces(), ownedProjects(), repo, &mockActorRepo{})
 	color, wip, hidden := model.LabelColorUnspecified, int32(5), true
 	if _, err := svc.UpdateStatus(context.Background(), owner, application.UpdateStatusInput{
 		ProjectID: validID, StatusID: stDoing.ID, Color: &color, WIPLimit: &wip, Hidden: &hidden,
@@ -493,22 +493,22 @@ func TestUpdateStatus_Settings(t *testing.T) {
 func TestBatchUpdateStatuses(t *testing.T) {
 	var gotSpecs []model.StatusSpec
 	var gotActor string
-	repo := &mockStatusRepo{batchFn: func(_ context.Context, _ string, specs []model.StatusSpec, _ []model.StatusDeletion, actor string) ([]*model.Status, error) {
-		gotSpecs, gotActor = specs, actor
+	repo := &mockStatusRepo{batchFn: func(_ context.Context, _ string, specs []model.StatusSpec, _ []model.StatusDeletion, author model.Author) ([]*model.Status, error) {
+		gotSpecs, gotActor = specs, author.UserID
 		return []*model.Status{stTodo}, nil
 	}}
-	svc := application.NewStatusService(personalWorkspaces(), ownedProjects(), repo)
+	svc := application.NewStatusService(personalWorkspaces(), ownedProjects(), repo, &mockActorRepo{})
 	specs := []model.StatusSpec{{ID: stTodo.ID, Name: "Backlog"}, {Name: "Nuevo", Category: model.IssueStateTodo}}
-	out, err := svc.BatchUpdateStatuses(context.Background(), owner, application.BatchUpdateStatusesInput{ProjectID: validID, Statuses: specs})
+	out, err := svc.BatchUpdateStatuses(context.Background(), as(owner), application.BatchUpdateStatusesInput{ProjectID: validID, Statuses: specs})
 	if err != nil || len(out) != 1 || len(gotSpecs) != 2 || gotActor != owner {
 		t.Errorf("batch: out %v specs %v actor %q err %v", out, gotSpecs, gotActor, err)
 	}
 
-	failRepo := &mockStatusRepo{batchFn: func(context.Context, string, []model.StatusSpec, []model.StatusDeletion, string) ([]*model.Status, error) {
+	failRepo := &mockStatusRepo{batchFn: func(context.Context, string, []model.StatusSpec, []model.StatusDeletion, model.Author) ([]*model.Status, error) {
 		t.Fatal("no debería llegar al repo")
 		return nil, nil
 	}}
-	svc = application.NewStatusService(personalWorkspaces(), ownedProjects(), failRepo)
+	svc = application.NewStatusService(personalWorkspaces(), ownedProjects(), failRepo, &mockActorRepo{})
 	for name, in := range map[string]application.BatchUpdateStatusesInput{
 		"id no UUID":         {Statuses: []model.StatusSpec{{ID: "abc", Name: "X"}}},
 		"borrado no UUID":    {Deletions: []model.StatusDeletion{{StatusID: "abc"}}},
@@ -516,16 +516,16 @@ func TestBatchUpdateStatuses(t *testing.T) {
 		"borrado sin estado": {Deletions: []model.StatusDeletion{{}}},
 	} {
 		in.ProjectID = validID
-		if _, err := svc.BatchUpdateStatuses(context.Background(), owner, in); !domainerrors.IsValidation(err) {
+		if _, err := svc.BatchUpdateStatuses(context.Background(), as(owner), in); !domainerrors.IsValidation(err) {
 			t.Errorf("%s: expected ValidationError, got %v", name, err)
 		}
 	}
 
 	boom := errors.New("boom")
-	svc = application.NewStatusService(personalWorkspaces(), ownedProjects(), &mockStatusRepo{batchFn: func(context.Context, string, []model.StatusSpec, []model.StatusDeletion, string) ([]*model.Status, error) {
+	svc = application.NewStatusService(personalWorkspaces(), ownedProjects(), &mockStatusRepo{batchFn: func(context.Context, string, []model.StatusSpec, []model.StatusDeletion, model.Author) ([]*model.Status, error) {
 		return nil, boom
-	}})
-	if _, err := svc.BatchUpdateStatuses(context.Background(), owner, application.BatchUpdateStatusesInput{ProjectID: validID}); !errors.Is(err, boom) {
+	}}, &mockActorRepo{})
+	if _, err := svc.BatchUpdateStatuses(context.Background(), as(owner), application.BatchUpdateStatusesInput{ProjectID: validID}); !errors.Is(err, boom) {
 		t.Errorf("propaga el error del repo: got %v", err)
 	}
 }
