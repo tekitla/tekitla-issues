@@ -84,7 +84,8 @@ Seguí `docs/ci-cd-setup.md` (aparece después del update): service account de
 runtime, Artifact Registry, WIF, roles del deployer, tags protegidos y
 variables de CI (`GCP_DEPLOYER_SA`, `GCP_WIF_PROVIDER`, `CLOUD_SQL_INSTANCE`).
 
-Cloud SQL: una instancia Postgres de la **misma versión mayor** (16) o mayor,
+Cloud SQL: una instancia Postgres de la **misma versión mayor** que el Postgres
+compartido de Coolify (18) o mayor,
 una base por entorno y el usuario `issues_user`. **No** apliques
 `000001` en Cloud SQL: el schema llega con los datos en el paso (c).
 
@@ -97,23 +98,24 @@ de filas por tabla. Dry-run por defecto.
 Conexiones (dos terminales):
 
 ```bash
-# Origen: Postgres del recurso de Coolify (PG_LOCAL_PORT del recurso de QA)
-ssh -N -L 15432:127.0.0.1:15432 usuario@vps
+# Origen: Postgres compartido de Coolify de QA (túnel a la IP de su contenedor,
+# ver docs/deploy.md, paso 6)
+ssh -N -L 15432:<IP-del-contenedor>:5432 usuario@vps
 # Destino: Cloud SQL de QA
 cloud-sql-proxy <proyecto>:<región>:<instancia> --port 5433
 ```
 
 ```bash
-read -rs SRC_DATABASE_URL && export SRC_DATABASE_URL   # postgres://issues_user:<pass>@localhost:15432/issues?sslmode=disable
+read -rs SRC_DATABASE_URL && export SRC_DATABASE_URL   # postgres://tekitla_issues:<pass>@localhost:15432/tekitla_issues?sslmode=disable
 read -rs DST_DATABASE_URL && export DST_DATABASE_URL   # postgres://<admin>:<pass>@localhost:5433/<db-qa>?sslmode=disable
 
 ./scripts/migrate_db.sh            # dry-run: conecta, cuenta, genera el dump
 ./scripts/migrate_db.sh --apply    # restaura y verifica (sale con 2 si los conteos difieren)
 ```
 
-Sin `pg_dump` local usa la imagen `postgres:16` con Docker (reescribe
+Sin `pg_dump` local usa la imagen `postgres:18` con Docker (reescribe
 `localhost` a `host.docker.internal`). Si Cloud SQL es de una versión mayor
-más nueva, `PG_IMAGE=postgres:17`.
+más nueva, `PG_IMAGE=postgres:<esa versión>`.
 
 Después del restore, los objetos quedan a nombre del usuario de
 `DST_DATABASE_URL` y sin grants: corré los `GRANT` de `docs/ci-cd-setup.md`
@@ -164,7 +166,8 @@ QA a Cloud Run.
    de prod (sin cortar nada; mide el tiempo). Bajá el TTL del DNS que usen los
    clientes, si aplica. Anunciá la ventana.
 2. **Congelar escrituras**: en Coolify, detené el servicio `app` del recurso de
-   prod (Postgres sigue corriendo). Desde acá el servicio no responde.
+   prod (el Postgres compartido sigue corriendo). Desde acá el servicio no
+   responde.
 3. **Dump final**: no hay dump incremental; el último dump **es** un dump
    completo, tomado con las escrituras congeladas:
    ```bash
@@ -182,13 +185,16 @@ QA a Cloud Run.
 ## (g) Rollback y apagado de Coolify
 
 - Dejá el recurso de Coolify de prod **N días** (p. ej. 7–14) con la app
-  detenida y Postgres intacto, y los backups a S3 activos.
+  detenida y la base `tekitla_issues` intacta en el Postgres compartido, con
+  sus backups a S3 activos.
 - **Rollback** dentro de esa ventana: apuntá los clientes de vuelta a Coolify y
   arrancá `app`. Lo escrito en Cloud SQL después del corte no está en Coolify:
   si hay que conservarlo, copialo en sentido inverso con escrituras congeladas
   (`scripts/migrate_db.sh --apply --replace <cloud-sql> <coolify>`).
 - Pasados los N días sin incidentes:
-  1. Último backup del Postgres de Coolify a S3 (retención larga).
-  2. Borrar los recursos de QA y prod en Coolify (y sus volúmenes).
+  1. Último dump de `tekitla_issues` a S3 (retención larga).
+  2. Borrar los recursos de QA y prod en Coolify, y la base y el usuario
+     `tekitla_issues` de cada Postgres compartido (`DROP DATABASE`,
+     `DROP ROLE`; el Postgres sigue: lo usan otros proyectos).
   3. Borrar las variables de CI `COOLIFY_*` y el token de API de Coolify.
   4. Borrar las imágenes del registry de GHCR si ya no hacen falta.

@@ -7,7 +7,7 @@ set -euo pipefail
 #
 # No hay migration runner ni tabla schema_migrations: los .up.sql se aplican a
 # mano con psql, ANTES de que arranque el contenedor que los necesita. Sirve
-# para cualquier destino (Cloud SQL, el Postgres del compose de Coolify, uno
+# para cualquier destino (Cloud SQL, el Postgres compartido de Coolify, uno
 # local): solo necesita una DATABASE_URL alcanzable desde esta máquina.
 #
 # Pasos:
@@ -23,8 +23,9 @@ set -euo pipefail
 # Cómo llegar a la base:
 #   - Cloud SQL: cloud-sql-proxy <proj:region:inst> --port 5432 y
 #       DATABASE_URL=postgres://USER:PASS@localhost:5432/DB?sslmode=disable
-#   - Coolify: túnel SSH al puerto del Postgres publicado en 127.0.0.1 del VPS
-#       ssh -N -L 15432:127.0.0.1:<PG_LOCAL_PORT> usuario@vps
+#   - Coolify: túnel SSH al contenedor del Postgres compartido del entorno
+#     (su IP en la red `coolify`; ver docs/deploy.md)
+#       ssh -N -L 15432:<IP-del-contenedor>:5432 usuario@vps
 #       DATABASE_URL=postgres://USER:PASS@localhost:15432/DB?sslmode=disable
 #
 # psql: usa el local si existe; si no, la imagen $PG_IMAGE con Docker. En modo
@@ -39,12 +40,12 @@ set -euo pipefail
 #
 # Variables:
 #   DATABASE_URL       (requerida) postgres://USER:PASS@HOST:PORT/DB?...
-#   PG_IMAGE           (default postgres:16) imagen para psql si no hay local
+#   PG_IMAGE           (default postgres:18) imagen para psql si no hay local
 #   PG_USE_DOCKER      1 = usar Docker aunque haya psql local
 #   PG_DOCKER_NETWORK  red de Docker a la que conectar el contenedor
 # =============================================================================
 
-PG_IMAGE="${PG_IMAGE:-postgres:16}"
+PG_IMAGE="${PG_IMAGE:-postgres:18}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {

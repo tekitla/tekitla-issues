@@ -7,7 +7,7 @@ set -euo pipefail
 #
 # Copia el schema `issues` (estructura + datos) de SRC a DST y verifica
 # que el conteo de filas por tabla sea idéntico. Pensado para mudar el servicio
-# de destino (p. ej. el Postgres del compose de Coolify -> Cloud SQL), pero
+# de destino (p. ej. el Postgres compartido de Coolify -> Cloud SQL), pero
 # sirve entre dos Postgres cualesquiera.
 #
 #   1. pg_dump -Fc -n issues del origen (solo lectura).
@@ -45,14 +45,14 @@ set -euo pipefail
 #
 # Variables:
 #   DB_SCHEMA          (default issues) schema a copiar
-#   PG_IMAGE           (default postgres:16) usar la versión mayor del servidor más nuevo
+#   PG_IMAGE           (default postgres:18) usar la versión mayor del servidor más nuevo
 #   PG_USE_DOCKER      1 = usar Docker aunque haya herramientas locales
 #   PG_DOCKER_NETWORK  red de Docker para los contenedores
 #   KEEP_DUMP          ruta donde dejar una copia del dump (default: se borra)
 # =============================================================================
 
 SCHEMA="${DB_SCHEMA:-issues}"
-PG_IMAGE="${PG_IMAGE:-postgres:16}"
+PG_IMAGE="${PG_IMAGE:-postgres:18}"
 
 usage() {
   sed -n '/^# Uso:/,/^# Las URLs/p' "$0" | sed 's/^# \{0,1\}//' >&2
