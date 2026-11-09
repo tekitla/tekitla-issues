@@ -21,7 +21,7 @@ import (
 //  3. Pone nombre y rank provisorios (derivados del id) a los que quedan.
 //  4. Guarda cada estado con su nombre final y un rank nuevo según su
 //     posición (a0, a1, ...), y crea los nuevos.
-func (r *StatusRepository) BatchUpdate(ctx context.Context, projectID string, specs []model.StatusSpec, deletions []model.StatusDeletion, actorUID string) ([]*model.Status, error) {
+func (r *StatusRepository) BatchUpdate(ctx context.Context, projectID string, specs []model.StatusSpec, deletions []model.StatusDeletion, author model.Author) ([]*model.Status, error) {
 	var out []statusRow
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := lockProject(tx, projectID); err != nil {
@@ -63,7 +63,7 @@ func (r *StatusRepository) BatchUpdate(ctx context.Context, projectID string, sp
 					return domainerrors.FailedPreconditionError("status has issues: move_to_status_id is required",
 						map[string]any{"status_id": d.StatusID, "issues": count}).WithReason("STATUS_HAS_ISSUES")
 				}
-				if err := moveAllIssues(tx, projectID, rowByID[d.StatusID], toStatusRow(finalByID[d.MoveToStatusID]), actorUID); err != nil {
+				if err := moveAllIssues(tx, projectID, rowByID[d.StatusID], toStatusRow(finalByID[d.MoveToStatusID]), author); err != nil {
 					return err
 				}
 			}

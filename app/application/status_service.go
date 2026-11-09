@@ -152,8 +152,8 @@ func (s *StatusService) UpdateStatus(ctx context.Context, ownerUID string, in Up
 
 // BatchUpdateStatuses guarda la lista completa de estados de una vez, todo
 // o nada (ver model.PlanStatusBatch). Devuelve los estados por rank.
-func (s *StatusService) BatchUpdateStatuses(ctx context.Context, ownerUID string, in BatchUpdateStatusesInput) ([]*model.Status, error) {
-	if _, err := s.guard.ensure(ctx, ownerUID, in.ProjectID); err != nil {
+func (s *StatusService) BatchUpdateStatuses(ctx context.Context, who model.Author, in BatchUpdateStatusesInput) ([]*model.Status, error) {
+	if _, err := s.guard.ensure(ctx, who.UserID, in.ProjectID); err != nil {
 		return nil, err
 	}
 	// Los ids se validan como UUID antes de llegar a la base; que sean del
@@ -176,12 +176,12 @@ func (s *StatusService) BatchUpdateStatuses(ctx context.Context, ownerUID string
 			}
 		}
 	}
-	return s.statuses.BatchUpdate(ctx, in.ProjectID, in.Statuses, in.Deletions, ownerUID)
+	return s.statuses.BatchUpdate(ctx, in.ProjectID, in.Statuses, in.Deletions, who)
 }
 
 // DeleteStatus borra un estado y pasa sus issues a moveToStatusID.
-func (s *StatusService) DeleteStatus(ctx context.Context, ownerUID, projectID, statusID, moveToStatusID string) error {
-	if _, err := s.guard.ensure(ctx, ownerUID, projectID); err != nil {
+func (s *StatusService) DeleteStatus(ctx context.Context, who model.Author, projectID, statusID, moveToStatusID string) error {
+	if _, err := s.guard.ensure(ctx, who.UserID, projectID); err != nil {
 		return err
 	}
 	if err := validateUUID("status_id", statusID); err != nil {
@@ -195,5 +195,5 @@ func (s *StatusService) DeleteStatus(ctx context.Context, ownerUID, projectID, s
 			return domainerrors.ValidationError("move_to_status_id must be another status", map[string]any{"field": "move_to_status_id"})
 		}
 	}
-	return s.statuses.Delete(ctx, projectID, statusID, moveToStatusID, ownerUID)
+	return s.statuses.Delete(ctx, projectID, statusID, moveToStatusID, who)
 }

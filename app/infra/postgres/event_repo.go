@@ -90,7 +90,7 @@ type eventCursor struct {
 
 // insertEvent guarda un evento del issue. El comentario, si lo hay, ya tiene
 // que estar insertado.
-func insertEvent(tx *gorm.DB, issueID, actorUID string, ev *model.IssueEvent, at time.Time) error {
+func insertEvent(tx *gorm.DB, issueID string, author model.Author, ev *model.IssueEvent, at time.Time) error {
 	data, err := eventData(ev)
 	if err != nil {
 		return err
@@ -100,10 +100,18 @@ func insertEvent(tx *gorm.DB, issueID, actorUID string, ev *model.IssueEvent, at
 		commentID = &ev.Comment.ID
 	}
 	return tx.Exec(
-		`INSERT INTO issues.issue_events (id, issue_id, actor_uid, kind, data, comment_id, created_at)
-		 VALUES (?, ?, ?, ?, ?::jsonb, ?, ?)`,
-		uuid.NewString(), issueID, actorUID, string(ev.Kind), string(data), commentID, at,
+		`INSERT INTO issues.issue_events (id, issue_id, actor_uid, agent_id, kind, data, comment_id, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?::jsonb, ?, ?)`,
+		uuid.NewString(), issueID, author.UserID, agentIDOrNil(author), string(ev.Kind), string(data), commentID, at,
 	).Error
+}
+
+// agentIDOrNil: agent_id es NULL cuando el cambio lo hizo la persona.
+func agentIDOrNil(author model.Author) *string {
+	if author.AgentID == "" {
+		return nil
+	}
+	return &author.AgentID
 }
 
 func eventData(ev *model.IssueEvent) ([]byte, error) {
@@ -267,7 +275,7 @@ func attachLabels(db *gorm.DB, issues []*model.Issue) error {
 // Move pasa el issue a target y, si place no es cero, lo reubica entre sus
 // vecinos. Toma el lock del proyecto (los ranks se calculan contra todo el
 // orden del proyecto) y el del issue.
-func (r *IssueRepository) Move(ctx context.Context, projectID string, number int32, target *model.Status, place port.Placement, actorUID string) (*model.Issue, error) {
+func (r *IssueRepository) Move(ctx context.Context, projectID string, number int32, target *model.Status, place port.Placement, author model.Author) (*model.Issue, error) {
 	details := map[string]any{"project_id": projectID, "number": number}
 	var out *model.Issue
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -315,7 +323,7 @@ func (r *IssueRepository) Move(ctx context.Context, projectID string, number int
 				return err
 			}
 			ev := &model.IssueEvent{Kind: model.EventStatusChanged, Status: model.NewStatusChange(fromStatusRow(from), target)}
-			if err := insertEvent(tx, cur.ID, actorUID, ev, now); err != nil {
+			if err := insertEvent(tx, cur.ID, author, ev, now); err != nil {
 				return err
 			}
 		}
@@ -415,7 +423,7 @@ func firstOr(keys []string, def string) string {
 }
 
 // Update aplica el patch y registra un evento por cada cambio real.
-func (r *IssueRepository) Update(ctx context.Context, projectID string, number int32, patch model.IssuePatch, actorUID string) (*model.Issue, error) {
+func (r *IssueRepository) Update(ctx context.Context, projectID string, number int32, patch model.IssuePatch, author model.Author) (*model.Issue, error) {
 	details := map[string]any{"project_id": projectID, "number": number}
 	var out *model.Issue
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -459,7 +467,7 @@ func (r *IssueRepository) Update(ctx context.Context, projectID string, number i
 			return err
 		}
 		for _, ev := range events {
-			if err := insertEvent(tx, cur.ID, actorUID, ev, now); err != nil {
+			if err := insertEvent(tx, cur.ID, author, ev, now); err != nil {
 				return err
 			}
 		}
@@ -491,7 +499,7 @@ func replaceLabels(tx *gorm.DB, issueID string, change *model.LabelsChange) erro
 }
 
 // AddComment guarda el comentario y su evento.
-func (r *IssueRepository) AddComment(ctx context.Context, projectID string, number int32, comment *model.Comment) (*model.Comment, error) {
+func (r *IssueRepository) AddComment(ctx context.Context, projectID string, number int32, comment *model.Comment, author model.Author) (*model.Comment, error) {
 	details := map[string]any{"project_id": projectID, "number": number}
 	now := dbNow()
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -512,7 +520,7 @@ func (r *IssueRepository) AddComment(ctx context.Context, projectID string, numb
 		if err := tx.Create(row).Error; err != nil {
 			return err
 		}
-		return insertEvent(tx, comment.IssueID, comment.AuthorUID, &model.IssueEvent{Kind: model.EventCommented, Comment: comment}, now)
+		return insertEvent(tx, comment.IssueID, author, &model.IssueEvent{Kind: model.EventCommented, Comment: comment}, now)
 	})
 	if err != nil {
 		return nil, writeError(err, "issue", "comment", details)

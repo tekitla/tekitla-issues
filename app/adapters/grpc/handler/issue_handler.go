@@ -116,11 +116,11 @@ func (h *IssueHandler) GetIssue(ctx context.Context, req *issuesv1.GetIssueReque
 }
 
 func (h *IssueHandler) CreateIssue(ctx context.Context, req *issuesv1.CreateIssueRequest) (*issuesv1.CreateIssueResponse, error) {
-	uid, err := requireUserID(ctx)
+	who, err := requireAuthor(ctx)
 	if err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)
 	}
-	issue, err := h.issueSvc.CreateIssue(ctx, uid, application.CreateIssueInput{
+	issue, err := h.issueSvc.CreateIssue(ctx, who, application.CreateIssueInput{
 		ProjectID:   req.GetProjectId(),
 		Title:       req.GetTitle(),
 		Description: req.GetDescription(),
@@ -133,11 +133,11 @@ func (h *IssueHandler) CreateIssue(ctx context.Context, req *issuesv1.CreateIssu
 }
 
 func (h *IssueHandler) MoveIssue(ctx context.Context, req *issuesv1.MoveIssueRequest) (*issuesv1.MoveIssueResponse, error) {
-	uid, err := requireUserID(ctx)
+	who, err := requireAuthor(ctx)
 	if err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)
 	}
-	issue, err := h.issueSvc.MoveIssue(ctx, uid, application.MoveIssueInput{
+	issue, err := h.issueSvc.MoveIssue(ctx, who, application.MoveIssueInput{
 		ProjectID: req.GetProjectId(),
 		Number:    req.GetNumber(),
 		State:     mapper.IssueStateFromProto(req.GetState()),

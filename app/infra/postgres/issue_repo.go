@@ -63,7 +63,7 @@ var errProjectNotOwned = errors.New("project not found in workspaces")
 // sale del mayor rank del proyecto, leído con el lock tomado). Si el INSERT
 // falla, el rollback devuelve el número (no queda hueco); como no hay borrado
 // de issues, un número asignado nunca se reutiliza.
-func (r *IssueRepository) Create(ctx context.Context, workspaceIDs []string, issue *model.Issue, actorUID string) (*model.Issue, error) {
+func (r *IssueRepository) Create(ctx context.Context, workspaceIDs []string, issue *model.Issue, author model.Author) (*model.Issue, error) {
 	row := toIssueRow(issue)
 	now := dbNow()
 	row.CreatedAt, row.UpdatedAt = now, now
@@ -113,7 +113,7 @@ func (r *IssueRepository) Create(ctx context.Context, workspaceIDs []string, iss
 		if err := tx.Create(row).Error; err != nil {
 			return err
 		}
-		return insertEvent(tx, row.ID, actorUID, &model.IssueEvent{Kind: model.EventCreated}, now)
+		return insertEvent(tx, row.ID, author, &model.IssueEvent{Kind: model.EventCreated}, now)
 	})
 	if errors.Is(err, errProjectNotOwned) {
 		return nil, domainerrors.NotFoundError("project not found", map[string]any{"id": issue.ProjectID})

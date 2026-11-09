@@ -128,7 +128,7 @@ func (s memProjects) List(_ context.Context, workspaceIDs []string, _ port.PageF
 	return page, nil
 }
 
-func (s memIssues) Create(_ context.Context, workspaceIDs []string, issue *model.Issue, actorUID string) (*model.Issue, error) {
+func (s memIssues) Create(_ context.Context, workspaceIDs []string, issue *model.Issue, author model.Author) (*model.Issue, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if p, ok := s.projects[issue.ProjectID]; !ok || !slices.Contains(workspaceIDs, p.WorkspaceID) {
@@ -150,7 +150,7 @@ func (s memIssues) Create(_ context.Context, workspaceIDs []string, issue *model
 	issue.CreatedAt, issue.UpdatedAt = time.Now(), time.Now()
 	issue.LabelIDs = []string{}
 	s.issues = append(s.issues, issue)
-	s.addEvent(issue.ID, actorUID, &model.IssueEvent{Kind: model.EventCreated})
+	s.addEvent(issue.ID, author, &model.IssueEvent{Kind: model.EventCreated})
 	return issue, nil
 }
 

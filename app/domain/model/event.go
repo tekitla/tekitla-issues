@@ -39,25 +39,43 @@ const (
 	EventDiscarded EventKind = "discarded"
 	// EventRestored: RestoreIssue.
 	EventRestored EventKind = "restored"
+	// EventAssigneeChanged: cambio de asignado (issue 025).
+	EventAssigneeChanged EventKind = "assignee_changed"
 )
 
 // IssueEvent es un cambio en un issue, para su historial. Según Kind, viene
 // lleno uno de Status, Title, Priority, Labels o Comment (Created y
 // DescriptionChanged no tienen detalle). Discarded y Restored usan Status
-// (de dónde a dónde), y Discarded además Reason.
+// (de dónde a dónde), y Discarded además Reason. AssigneeChanged usa
+// Assignee.
 type IssueEvent struct {
-	ID       string
-	IssueID  string
+	ID      string
+	IssueID string
+	// ActorUID es la persona responsable, también cuando lo hizo uno de sus
+	// agentes.
 	ActorUID string
-	Kind     EventKind
-	Status   *StatusChange
+	// AgentID es el agente que hizo el cambio a nombre de ActorUID; vacío si
+	// lo hizo la persona (y en los eventos anteriores al issue 025).
+	AgentID string
+	Kind    EventKind
+	Status  *StatusChange
 	// Reason es el motivo, solo en EventDiscarded.
 	Reason    string
 	Title     *TitleChange
 	Priority  *PriorityChange
 	Labels    *LabelsChange
 	Comment   *Comment
+	Assignee  *AssigneeChange
 	CreatedAt time.Time
+}
+
+// AssigneeChange es el asignado antes y después (vacío = sin asignar), con
+// los nombres al momento del cambio.
+type AssigneeChange struct {
+	FromID   string
+	FromName string
+	ToID     string
+	ToName   string
 }
 
 // StatusChange guarda id, nombre y categoría de los dos estados al momento
@@ -108,16 +126,21 @@ type IssuePatch struct {
 	// LabelIDs reemplaza las etiquetas (nil = no cambian; vacío = sin
 	// etiquetas). Sin repetidos.
 	LabelIDs *[]string
+	// AssigneeActorID cambia el asignado (vacío = sin asignar). Ya validado:
+	// un actor visible y no revocado.
+	AssigneeActorID *string
 }
 
 // IsEmpty informa si el patch no pide ningún cambio.
 func (p IssuePatch) IsEmpty() bool {
-	return p.Title == nil && p.Description == nil && p.Priority == nil && p.LabelIDs == nil
+	return p.Title == nil && p.Description == nil && p.Priority == nil && p.LabelIDs == nil && p.AssigneeActorID == nil
 }
 
 // IssueChanges compara el issue con el patch y devuelve los eventos de lo que
 // de verdad cambia (sin ID, actor ni fecha: los pone quien los guarda).
-// labels son las etiquetas del proyecto por id, para guardar sus nombres.
+// labels son las etiquetas del proyecto por id, para guardar sus nombres. El
+// evento de asignado sale solo con los ids: los nombres los completa quien lo
+// guarda.
 func IssueChanges(issue *Issue, patch IssuePatch, labels map[string]*Label) []*IssueEvent {
 	var events []*IssueEvent
 	if patch.Title != nil && *patch.Title != issue.Title {
@@ -141,6 +164,9 @@ func IssueChanges(issue *Issue, patch IssuePatch, labels map[string]*Label) []*I
 			}
 			events = append(events, &IssueEvent{Kind: EventLabelsChanged, Labels: change})
 		}
+	}
+	if patch.AssigneeActorID != nil && *patch.AssigneeActorID != issue.AssigneeActorID {
+		events = append(events, &IssueEvent{Kind: EventAssigneeChanged, Assignee: &AssigneeChange{FromID: issue.AssigneeActorID, ToID: *patch.AssigneeActorID}})
 	}
 	return events
 }

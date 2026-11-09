@@ -166,7 +166,7 @@ func (r *StatusRepository) Update(ctx context.Context, projectID, id string, pat
 
 // Delete borra el estado y pasa sus issues a moveToID, con un evento por
 // issue movido.
-func (r *StatusRepository) Delete(ctx context.Context, projectID, id, moveToID, actorUID string) error {
+func (r *StatusRepository) Delete(ctx context.Context, projectID, id, moveToID string, author model.Author) error {
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := lockProject(tx, projectID); err != nil {
 			return err
@@ -215,7 +215,7 @@ func (r *StatusRepository) Delete(ctx context.Context, projectID, id, moveToID, 
 				return domainerrors.FailedPreconditionError("status has issues: move_to_status_id is required", map[string]any{"issues": count}).
 					WithReason("STATUS_HAS_ISSUES")
 			}
-			if err := moveAllIssues(tx, projectID, status, target, actorUID); err != nil {
+			if err := moveAllIssues(tx, projectID, status, target, author); err != nil {
 				return err
 			}
 		}
@@ -229,7 +229,7 @@ func (r *StatusRepository) Delete(ctx context.Context, projectID, id, moveToID, 
 
 // moveAllIssues pasa todos los issues de from a to y registra un evento por
 // issue, en dos sentencias (el lock del proyecto queda tomado poco tiempo).
-func moveAllIssues(tx *gorm.DB, projectID string, from, to *statusRow, actorUID string) error {
+func moveAllIssues(tx *gorm.DB, projectID string, from, to *statusRow, author model.Author) error {
 	now := dbNow()
 	ev := &model.IssueEvent{Kind: model.EventStatusChanged, Status: model.NewStatusChange(fromStatusRow(from), fromStatusRow(to))}
 	data, err := eventData(ev)
@@ -237,12 +237,12 @@ func moveAllIssues(tx *gorm.DB, projectID string, from, to *statusRow, actorUID 
 		return err
 	}
 	err = tx.Exec(
-		`INSERT INTO issues.issue_events (id, issue_id, actor_uid, kind, data, created_at)
-		 SELECT gen_random_uuid(), id, ?, ?, ?::jsonb, ?
+		`INSERT INTO issues.issue_events (id, issue_id, actor_uid, agent_id, kind, data, created_at)
+		 SELECT gen_random_uuid(), id, ?, ?, ?, ?::jsonb, ?
 		   FROM issues.issues
 		  WHERE project_id = ? AND status_id = ?
 		  ORDER BY rank`,
-		actorUID, string(model.EventStatusChanged), string(data), now, projectID, from.ID,
+		author.UserID, agentIDOrNil(author), string(model.EventStatusChanged), string(data), now, projectID, from.ID,
 	).Error
 	if err != nil {
 		return err

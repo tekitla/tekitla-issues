@@ -171,8 +171,8 @@ func (s *IssueService) GetIssue(ctx context.Context, ownerUID, projectID string,
 
 // CreateIssue crea un issue en el primer estado «por hacer» del proyecto, con
 // el siguiente número y al final de su orden.
-func (s *IssueService) CreateIssue(ctx context.Context, ownerUID string, in CreateIssueInput) (*model.Issue, error) {
-	workspaceIDs, err := s.guard.ensure(ctx, ownerUID, in.ProjectID)
+func (s *IssueService) CreateIssue(ctx context.Context, who model.Author, in CreateIssueInput) (*model.Issue, error) {
+	workspaceIDs, err := s.guard.ensure(ctx, who.UserID, in.ProjectID)
 	if err != nil {
 		return nil, err
 	}
@@ -210,13 +210,13 @@ func (s *IssueService) CreateIssue(ctx context.Context, ownerUID string, in Crea
 		StatusID:    todo.ID,
 		Priority:    priority,
 	}
-	return s.issues.Create(ctx, workspaceIDs, issue, ownerUID)
+	return s.issues.Create(ctx, workspaceIDs, issue, who)
 }
 
 // MoveIssue cambia el estado de un issue y, opcionalmente, su lugar en la
 // columna destino.
-func (s *IssueService) MoveIssue(ctx context.Context, ownerUID string, in MoveIssueInput) (*model.Issue, error) {
-	if _, err := s.guard.ensure(ctx, ownerUID, in.ProjectID); err != nil {
+func (s *IssueService) MoveIssue(ctx context.Context, who model.Author, in MoveIssueInput) (*model.Issue, error) {
+	if _, err := s.guard.ensure(ctx, who.UserID, in.ProjectID); err != nil {
 		return nil, err
 	}
 	if err := validateIssueNumber(in.Number); err != nil {
@@ -260,13 +260,13 @@ func (s *IssueService) MoveIssue(ctx context.Context, ownerUID string, in MoveIs
 			return nil, domainerrors.InternalError("project has no status for the category", map[string]any{"project_id": in.ProjectID, "state": string(in.State)})
 		}
 	}
-	return s.issues.Move(ctx, in.ProjectID, in.Number, target, in.Place, ownerUID)
+	return s.issues.Move(ctx, in.ProjectID, in.Number, target, in.Place, who)
 }
 
 // DiscardIssue descarta un issue con un motivo: lo pasa a un estado CANCELED
 // (el pedido o el primero) conservando su lugar.
-func (s *IssueService) DiscardIssue(ctx context.Context, ownerUID string, in DiscardIssueInput) (*model.Issue, error) {
-	if _, err := s.guard.ensure(ctx, ownerUID, in.ProjectID); err != nil {
+func (s *IssueService) DiscardIssue(ctx context.Context, who model.Author, in DiscardIssueInput) (*model.Issue, error) {
+	if _, err := s.guard.ensure(ctx, who.UserID, in.ProjectID); err != nil {
 		return nil, err
 	}
 	if err := validateIssueNumber(in.Number); err != nil {
@@ -293,25 +293,25 @@ func (s *IssueService) DiscardIssue(ctx context.Context, ownerUID string, in Dis
 			return nil, domainerrors.ValidationError("status is not a canceled status", map[string]any{"field": "status_id", "value": in.StatusID})
 		}
 	}
-	return s.issues.Discard(ctx, in.ProjectID, in.Number, in.StatusID, reason, ownerUID)
+	return s.issues.Discard(ctx, in.ProjectID, in.Number, in.StatusID, reason, who)
 }
 
 // RestoreIssue restaura un issue descartado: lo pasa al primer estado «por
 // hacer», al final de esa columna.
-func (s *IssueService) RestoreIssue(ctx context.Context, ownerUID, projectID string, number int32) (*model.Issue, error) {
-	if _, err := s.guard.ensure(ctx, ownerUID, projectID); err != nil {
+func (s *IssueService) RestoreIssue(ctx context.Context, who model.Author, projectID string, number int32) (*model.Issue, error) {
+	if _, err := s.guard.ensure(ctx, who.UserID, projectID); err != nil {
 		return nil, err
 	}
 	if err := validateIssueNumber(number); err != nil {
 		return nil, err
 	}
-	return s.issues.Restore(ctx, projectID, number, ownerUID)
+	return s.issues.Restore(ctx, projectID, number, who)
 }
 
 // UpdateIssue edita título, descripción, prioridad o etiquetas de un issue.
 // Sin cambios pedidos devuelve el issue tal cual.
-func (s *IssueService) UpdateIssue(ctx context.Context, ownerUID string, in UpdateIssueInput) (*model.Issue, error) {
-	if _, err := s.guard.ensure(ctx, ownerUID, in.ProjectID); err != nil {
+func (s *IssueService) UpdateIssue(ctx context.Context, who model.Author, in UpdateIssueInput) (*model.Issue, error) {
+	if _, err := s.guard.ensure(ctx, who.UserID, in.ProjectID); err != nil {
 		return nil, err
 	}
 	if err := validateIssueNumber(in.Number); err != nil {
@@ -324,7 +324,7 @@ func (s *IssueService) UpdateIssue(ctx context.Context, ownerUID string, in Upda
 	if patch.IsEmpty() {
 		return s.issues.GetByNumber(ctx, in.ProjectID, in.Number)
 	}
-	return s.issues.Update(ctx, in.ProjectID, in.Number, patch, ownerUID)
+	return s.issues.Update(ctx, in.ProjectID, in.Number, patch, who)
 }
 
 func (s *IssueService) buildPatch(ctx context.Context, in UpdateIssueInput) (model.IssuePatch, error) {
@@ -393,8 +393,8 @@ func (s *IssueService) projectLabelIDs(ctx context.Context, projectID string, id
 }
 
 // CreateComment comenta un issue.
-func (s *IssueService) CreateComment(ctx context.Context, ownerUID, projectID string, number int32, body string) (*model.Comment, error) {
-	if _, err := s.guard.ensure(ctx, ownerUID, projectID); err != nil {
+func (s *IssueService) CreateComment(ctx context.Context, who model.Author, projectID string, number int32, body string) (*model.Comment, error) {
+	if _, err := s.guard.ensure(ctx, who.UserID, projectID); err != nil {
 		return nil, err
 	}
 	if err := validateIssueNumber(number); err != nil {
@@ -406,9 +406,9 @@ func (s *IssueService) CreateComment(ctx context.Context, ownerUID, projectID st
 	}
 	return s.issues.AddComment(ctx, projectID, number, &model.Comment{
 		ID:        uuid.NewString(),
-		AuthorUID: ownerUID,
+		AuthorUID: who.UserID,
 		Body:      text,
-	})
+	}, who)
 }
 
 // ListIssueEvents devuelve una página del historial de un issue, del más
