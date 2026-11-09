@@ -93,6 +93,9 @@ func (h *IssueHandler) ListIssues(ctx context.Context, req *issuesv1.ListIssuesR
 		Order:      mapper.IssueOrderFromProto(req.GetOrderBy()),
 		Cursor:     req.GetPage().GetCursor(),
 		Limit:      req.GetPage().GetLimit(),
+
+		AssigneeActorIDs: req.GetAssigneeActorIds(),
+		Unassigned:       req.GetUnassigned(),
 	})
 	if err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)
@@ -125,6 +128,8 @@ func (h *IssueHandler) CreateIssue(ctx context.Context, req *issuesv1.CreateIssu
 		Title:       req.GetTitle(),
 		Description: req.GetDescription(),
 		Priority:    mapper.PriorityFromProto(req.GetPriority()),
+
+		AssigneeActorID: req.GetAssigneeActorId(),
 	})
 	if err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)

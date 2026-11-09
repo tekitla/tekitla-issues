@@ -33,7 +33,7 @@ func projectLabels() *mockLabelRepo {
 }
 
 func svcWith(issues *mockIssueRepo, statuses *mockStatusRepo, labels *mockLabelRepo) *application.IssueService {
-	return application.NewIssueService(personalWorkspaces(), ownedProjects(), issues, statuses, labels)
+	return application.NewIssueService(personalWorkspaces(), ownedProjects(), issues, statuses, labels, &mockActorRepo{})
 }
 
 // ================================================================

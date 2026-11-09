@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -21,6 +22,8 @@ type IssueService struct {
 	issues   port.IssueRepository
 	statuses port.StatusRepository
 	labels   port.LabelRepository
+	actors   actorAccess
+	now      func() time.Time
 }
 
 // NewIssueService construye el servicio.
@@ -30,12 +33,15 @@ func NewIssueService(
 	issues port.IssueRepository,
 	statuses port.StatusRepository,
 	labels port.LabelRepository,
+	actors port.ActorRepository,
 ) *IssueService {
 	return &IssueService{
 		guard:    projectGuard{workspaces: workspaces{repo: workspaceRepo}, projects: projects},
 		issues:   issues,
 		statuses: statuses,
 		labels:   labels,
+		actors:   actorAccess{repo: actors},
+		now:      utcNow,
 	}
 }
 
@@ -51,9 +57,13 @@ type ListIssuesInput struct {
 	LabelIDs   []string
 	Query      string
 	// Order vacío = rank.
-	Order  model.IssueOrder
-	Cursor string
-	Limit  int32
+	Order model.IssueOrder
+	// AssigneeActorIDs y Unassigned: los de esos actores o sin asignar (O
+	// entre sí). Un actor inexistente no es error: no trae nada.
+	AssigneeActorIDs []string
+	Unassigned       bool
+	Cursor           string
+	Limit            int32
 }
 
 // DiscardIssueInput son los datos que acepta DiscardIssue. StatusID vacío =
@@ -72,6 +82,8 @@ type CreateIssueInput struct {
 	Title       string
 	Description string
 	Priority    model.Priority
+	// AssigneeActorID vacío = sin asignar.
+	AssigneeActorID string
 }
 
 // MoveIssueInput son los datos que acepta MoveIssue. StatusID manda sobre
@@ -94,6 +106,24 @@ type UpdateIssueInput struct {
 	Priority    *model.Priority
 	// LabelIDs reemplaza las etiquetas (nil = no cambian).
 	LabelIDs *[]string
+	// AssigneeActorID cambia el asignado (nil = no cambia; vacío = sin
+	// asignar).
+	AssigneeActorID *string
+}
+
+// ImportIssueInput son los datos que acepta ImportIssue (ver
+// model.ImportSpec). CreatedAt cero = ahora; Priority sin especificar =
+// model.DefaultPriority.
+type ImportIssueInput struct {
+	ProjectID   string
+	SourceKey   string
+	Number      int32
+	CreatedAt   time.Time
+	Title       string
+	Description string
+	Priority    model.Priority
+	State       model.IssueState
+	LabelNames  []string
 }
 
 // ListIssues devuelve una página de issues del proyecto con la búsqueda,
@@ -132,6 +162,18 @@ func (s *IssueService) ListIssues(ctx context.Context, ownerUID string, in ListI
 	}
 	if filter.Search, err = model.ParseIssueSearch(in.Query, project.Key); err != nil {
 		return nil, err
+	}
+	// Asignados: un id que no es UUID no puede ser de ningún actor. Si todos
+	// los pedidos son así y no se piden los sin asignar, no hay nada que
+	// traer.
+	for _, id := range unique(in.AssigneeActorIDs) {
+		if _, err := uuid.Parse(id); err == nil {
+			filter.AssigneeActorIDs = append(filter.AssigneeActorIDs, id)
+		}
+	}
+	filter.Unassigned = in.Unassigned
+	if len(in.AssigneeActorIDs) > 0 && len(filter.AssigneeActorIDs) == 0 && !in.Unassigned {
+		return &port.IssuePage{Issues: []*model.Issue{}}, nil
 	}
 	if len(in.StatusIDs) > 0 {
 		statuses, err := s.statuses.List(ctx, in.ProjectID)
@@ -200,6 +242,11 @@ func (s *IssueService) CreateIssue(ctx context.Context, who model.Author, in Cre
 		// DeleteStatus nunca deja una categoría vacía: es un problema de datos.
 		return nil, domainerrors.InternalError("project has no todo status", map[string]any{"project_id": in.ProjectID})
 	}
+	if in.AssigneeActorID != "" {
+		if err := s.actors.assignable(ctx, who.UserID, "assignee_actor_id", in.AssigneeActorID, s.now()); err != nil {
+			return nil, err
+		}
+	}
 
 	issue := &model.Issue{
 		ID:          uuid.NewString(),
@@ -209,6 +256,8 @@ func (s *IssueService) CreateIssue(ctx context.Context, who model.Author, in Cre
 		State:       todo.Category,
 		StatusID:    todo.ID,
 		Priority:    priority,
+
+		AssigneeActorID: in.AssigneeActorID,
 	}
 	return s.issues.Create(ctx, workspaceIDs, issue, who)
 }
@@ -317,7 +366,7 @@ func (s *IssueService) UpdateIssue(ctx context.Context, who model.Author, in Upd
 	if err := validateIssueNumber(in.Number); err != nil {
 		return nil, err
 	}
-	patch, err := s.buildPatch(ctx, in)
+	patch, err := s.buildPatch(ctx, who.UserID, in)
 	if err != nil {
 		return nil, err
 	}
@@ -327,7 +376,7 @@ func (s *IssueService) UpdateIssue(ctx context.Context, who model.Author, in Upd
 	return s.issues.Update(ctx, in.ProjectID, in.Number, patch, who)
 }
 
-func (s *IssueService) buildPatch(ctx context.Context, in UpdateIssueInput) (model.IssuePatch, error) {
+func (s *IssueService) buildPatch(ctx context.Context, uid string, in UpdateIssueInput) (model.IssuePatch, error) {
 	var patch model.IssuePatch
 	if in.Title != nil {
 		title, err := model.NormalizeIssueTitle(*in.Title)
@@ -357,7 +406,56 @@ func (s *IssueService) buildPatch(ctx context.Context, in UpdateIssueInput) (mod
 		}
 		patch.LabelIDs = &ids
 	}
+	if in.AssigneeActorID != nil {
+		id := *in.AssigneeActorID
+		if id != "" {
+			if err := s.actors.assignable(ctx, uid, "assignee_actor_id", id, s.now()); err != nil {
+				return patch, err
+			}
+		}
+		patch.AssigneeActorID = &id
+	}
 	return patch, nil
+}
+
+// ImportIssue crea o actualiza un issue importado de otro tracker,
+// conservando su número (issue 025). Es idempotente por SourceKey: sin
+// cambios no escribe nada y devuelve model.ImportUnchanged.
+func (s *IssueService) ImportIssue(ctx context.Context, who model.Author, in ImportIssueInput) (*model.Issue, model.ImportOutcome, error) {
+	workspaceIDs, err := s.guard.ensure(ctx, who.UserID, in.ProjectID)
+	if err != nil {
+		return nil, "", err
+	}
+	spec := model.ImportSpec{ProjectID: in.ProjectID, Number: in.Number, CreatedAt: in.CreatedAt, State: in.State}
+	if spec.SourceKey, err = model.NormalizeSourceKey(in.SourceKey); err != nil {
+		return nil, "", err
+	}
+	if err := validateIssueNumber(in.Number); err != nil {
+		return nil, "", err
+	}
+	if spec.Title, err = model.NormalizeIssueTitle(in.Title); err != nil {
+		return nil, "", err
+	}
+	if spec.Description, err = model.NormalizeIssueDescription(in.Description); err != nil {
+		return nil, "", err
+	}
+	spec.Priority = in.Priority
+	if spec.Priority == model.PriorityUnspecified {
+		spec.Priority = model.DefaultPriority
+	}
+	if !spec.Priority.IsValid() {
+		return nil, "", invalidPriority(in.Priority)
+	}
+	if !in.State.IsValid() {
+		return nil, "", invalidState(in.State)
+	}
+	if spec.LabelNames, err = model.NormalizeImportLabels(in.LabelNames); err != nil {
+		return nil, "", err
+	}
+	if spec.CreatedAt.IsZero() {
+		spec.CreatedAt = s.now()
+	}
+	return s.issues.Import(ctx, workspaceIDs, spec, who)
 }
 
 // projectLabelIDs valida que las etiquetas sean del proyecto y quita repetidos.

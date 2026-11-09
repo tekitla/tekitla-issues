@@ -107,6 +107,9 @@ func (s memIssues) Update(_ context.Context, projectID string, number int32, pat
 	if patch.LabelIDs != nil {
 		it.LabelIDs = append([]string{}, *patch.LabelIDs...)
 	}
+	if patch.AssigneeActorID != nil {
+		it.AssigneeActorID = *patch.AssigneeActorID
+	}
 	return it, nil
 }
 

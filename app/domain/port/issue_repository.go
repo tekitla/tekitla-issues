@@ -17,6 +17,11 @@ type IssueFilter struct {
 	// LabelIDs: pasa un issue con cualquiera de ellas.
 	LabelIDs []string
 	Search   model.IssueSearch
+	// AssigneeActorIDs y Unassigned filtran por asignado, con O entre sí:
+	// pasa un issue asignado a cualquiera de los actores (UUIDs válidos) o,
+	// con Unassigned, uno sin asignar. Los dos vacíos no filtran.
+	AssigneeActorIDs []string
+	Unassigned       bool
 	// Order nunca vacío (el service pone IssueOrderRank).
 	Order  model.IssueOrder
 	Cursor string
@@ -99,4 +104,12 @@ type IssueRepository interface {
 	AddComment(ctx context.Context, projectID string, number int32, comment *model.Comment, author model.Author) (*model.Comment, error)
 	// ListEvents pagina el historial del issue, del más viejo al más nuevo.
 	ListEvents(ctx context.Context, projectID string, number int32, page PageFilter) (*EventPage, error)
+	// Import crea o actualiza el issue de spec.SourceKey (ver
+	// model.ImportSpec) con el lock del proyecto, que tiene que ser de uno de
+	// workspaceIDs (si no, NotFound). Al crear: Conflict (reason
+	// ISSUE_NUMBER_TAKEN) si el número ya es de otro issue; next_issue_number
+	// queda mayor que el número importado. Al actualizar: FailedPrecondition
+	// (reason IMPORT_NUMBER_MISMATCH) si el número no coincide. Cada cambio
+	// registra su evento como en los RPC sueltos.
+	Import(ctx context.Context, workspaceIDs []string, spec model.ImportSpec, author model.Author) (*model.Issue, model.ImportOutcome, error)
 }

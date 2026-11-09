@@ -2,6 +2,7 @@ package application_test
 
 import (
 	"context"
+	"time"
 
 	"github.com/tekitla/tekitla-issues/app/domain/model"
 	"github.com/tekitla/tekitla-issues/app/domain/port"
@@ -75,6 +76,14 @@ type mockIssueRepo struct {
 	listEventsFn  func(ctx context.Context, projectID string, number int32, page port.PageFilter) (*port.EventPage, error)
 	discardFn     func(ctx context.Context, projectID string, number int32, statusID, reason string, author model.Author) (*model.Issue, error)
 	restoreFn     func(ctx context.Context, projectID string, number int32, author model.Author) (*model.Issue, error)
+	importFn      func(ctx context.Context, workspaceIDs []string, spec model.ImportSpec, author model.Author) (*model.Issue, model.ImportOutcome, error)
+}
+
+func (m *mockIssueRepo) Import(ctx context.Context, workspaceIDs []string, spec model.ImportSpec, author model.Author) (*model.Issue, model.ImportOutcome, error) {
+	if m.importFn == nil {
+		return nil, "", nil
+	}
+	return m.importFn(ctx, workspaceIDs, spec, author)
 }
 
 var _ port.IssueRepository = (*mockIssueRepo)(nil)
@@ -236,3 +245,95 @@ func (m *mockLabelRepo) Delete(ctx context.Context, projectID, id string) error 
 
 // as arma el autor de un cambio hecho por la persona uid (sin agente).
 func as(uid string) model.Author { return model.Author{UserID: uid} }
+
+// mockActorRepo satisface port.ActorRepository.
+type mockActorRepo struct {
+	ensurePersonFn func(ctx context.Context, person *model.Actor) (*model.Actor, error)
+	getFn          func(ctx context.Context, id string) (*model.Actor, error)
+	listAgentsFn   func(ctx context.Context, ownerID string, includeRevoked bool) ([]*model.Actor, error)
+	createAgentFn  func(ctx context.Context, agent *model.Actor) (*model.Actor, error)
+	revokeFn       func(ctx context.Context, id string, at time.Time) (*model.Actor, error)
+}
+
+var _ port.ActorRepository = (*mockActorRepo)(nil)
+
+func (m *mockActorRepo) EnsurePerson(ctx context.Context, person *model.Actor) (*model.Actor, error) {
+	if m.ensurePersonFn == nil {
+		return person, nil
+	}
+	return m.ensurePersonFn(ctx, person)
+}
+
+func (m *mockActorRepo) Get(ctx context.Context, id string) (*model.Actor, error) {
+	if m.getFn == nil {
+		return nil, nil
+	}
+	return m.getFn(ctx, id)
+}
+
+func (m *mockActorRepo) ListAgents(ctx context.Context, ownerID string, includeRevoked bool) ([]*model.Actor, error) {
+	if m.listAgentsFn == nil {
+		return nil, nil
+	}
+	return m.listAgentsFn(ctx, ownerID, includeRevoked)
+}
+
+func (m *mockActorRepo) CreateAgent(ctx context.Context, agent *model.Actor) (*model.Actor, error) {
+	if m.createAgentFn == nil {
+		return agent, nil
+	}
+	return m.createAgentFn(ctx, agent)
+}
+
+func (m *mockActorRepo) Revoke(ctx context.Context, id string, at time.Time) (*model.Actor, error) {
+	if m.revokeFn == nil {
+		return nil, nil
+	}
+	return m.revokeFn(ctx, id, at)
+}
+
+// mockTokenRepo satisface port.TokenRepository.
+type mockTokenRepo struct {
+	createFn  func(ctx context.Context, token *model.Token, hash []byte) (*model.Token, error)
+	getFn     func(ctx context.Context, id string) (*model.Token, error)
+	listFn    func(ctx context.Context, actorIDs []string, includeInactive bool, now time.Time) ([]*model.Token, error)
+	revokeFn  func(ctx context.Context, id string, at time.Time) (*model.Token, error)
+	resolveFn func(ctx context.Context, hash []byte, now time.Time) (*model.ResolvedToken, error)
+}
+
+var _ port.TokenRepository = (*mockTokenRepo)(nil)
+
+func (m *mockTokenRepo) Create(ctx context.Context, token *model.Token, hash []byte) (*model.Token, error) {
+	if m.createFn == nil {
+		return token, nil
+	}
+	return m.createFn(ctx, token, hash)
+}
+
+func (m *mockTokenRepo) Get(ctx context.Context, id string) (*model.Token, error) {
+	if m.getFn == nil {
+		return nil, nil
+	}
+	return m.getFn(ctx, id)
+}
+
+func (m *mockTokenRepo) List(ctx context.Context, actorIDs []string, includeInactive bool, now time.Time) ([]*model.Token, error) {
+	if m.listFn == nil {
+		return nil, nil
+	}
+	return m.listFn(ctx, actorIDs, includeInactive, now)
+}
+
+func (m *mockTokenRepo) Revoke(ctx context.Context, id string, at time.Time) (*model.Token, error) {
+	if m.revokeFn == nil {
+		return nil, nil
+	}
+	return m.revokeFn(ctx, id, at)
+}
+
+func (m *mockTokenRepo) Resolve(ctx context.Context, hash []byte, now time.Time) (*model.ResolvedToken, error) {
+	if m.resolveFn == nil {
+		return nil, nil
+	}
+	return m.resolveFn(ctx, hash, now)
+}

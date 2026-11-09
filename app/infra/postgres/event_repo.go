@@ -36,6 +36,7 @@ type eventRow struct {
 	Seq              int64
 	IssueID          string
 	ActorUID         string
+	AgentID          *string
 	Kind             string
 	Data             []byte
 	CreatedAt        time.Time
@@ -83,6 +84,13 @@ type labelsChangeData struct {
 	Removed []labelRef `json:"removed"`
 }
 
+type assigneeChangeData struct {
+	FromActorID     string `json:"from_actor_id"`
+	FromDisplayName string `json:"from_display_name"`
+	ToActorID       string `json:"to_actor_id"`
+	ToDisplayName   string `json:"to_display_name"`
+}
+
 // eventCursor: orden (seq ASC); seq es único.
 type eventCursor struct {
 	Seq int64 `json:"s"`
@@ -127,6 +135,9 @@ func eventData(ev *model.IssueEvent) ([]byte, error) {
 		v = priorityChangeData{From: int(ev.Priority.From), To: int(ev.Priority.To)}
 	case model.EventLabelsChanged:
 		v = labelsChangeData{Added: labelRefs(ev.Labels.Added), Removed: labelRefs(ev.Labels.Removed)}
+	case model.EventAssigneeChanged:
+		c := ev.Assignee
+		v = assigneeChangeData{FromActorID: c.FromID, FromDisplayName: c.FromName, ToActorID: c.ToID, ToDisplayName: c.ToName}
 	}
 	return json.Marshal(v)
 }
@@ -163,6 +174,9 @@ func fromEventRow(r *eventRow) (*model.IssueEvent, error) {
 		Kind:      model.EventKind(r.Kind),
 		CreatedAt: r.CreatedAt,
 	}
+	if r.AgentID != nil {
+		ev.AgentID = *r.AgentID
+	}
 	var err error
 	switch ev.Kind {
 	case model.EventStatusChanged, model.EventRestored:
@@ -185,6 +199,10 @@ func fromEventRow(r *eventRow) (*model.IssueEvent, error) {
 		var d labelsChangeData
 		err = json.Unmarshal(r.Data, &d)
 		ev.Labels = &model.LabelsChange{Added: refsToLabels(d.Added), Removed: refsToLabels(d.Removed)}
+	case model.EventAssigneeChanged:
+		var d assigneeChangeData
+		err = json.Unmarshal(r.Data, &d)
+		ev.Assignee = &model.AssigneeChange{FromID: d.FromActorID, FromName: d.FromDisplayName, ToID: d.ToActorID, ToName: d.ToDisplayName}
 	case model.EventCommented:
 		if r.CommentID == nil || r.CommentBody == nil || r.CommentAuthorUID == nil || r.CommentCreatedAt == nil {
 			return nil, fmt.Errorf("event %s: comment missing", r.ID)
@@ -461,6 +479,11 @@ func (r *IssueRepository) Update(ctx context.Context, projectID string, number i
 				if err := replaceLabels(tx, cur.ID, ev.Labels); err != nil {
 					return err
 				}
+			case model.EventAssigneeChanged:
+				updates["assignee_actor_id"] = nilIfEmpty(ev.Assignee.ToID)
+				if err := fillAssigneeNames(tx, ev.Assignee); err != nil {
+					return err
+				}
 			}
 		}
 		if err := tx.Model(&issueRow{}).Where("id = ?", cur.ID).Updates(updates).Error; err != nil {
@@ -491,7 +514,7 @@ func replaceLabels(tx *gorm.DB, issueID string, change *model.LabelsChange) erro
 		}
 	}
 	for _, l := range change.Added {
-		if err := tx.Exec(`INSERT INTO issues.issue_labels (issue_id, label_id) VALUES (?, ?)`, issueID, l.ID).Error; err != nil {
+		if err := tx.Exec(`INSERT INTO issues.issue_labels (issue_id, label_id, imported) VALUES (?, ?, false)`, issueID, l.ID).Error; err != nil {
 			return err
 		}
 	}
@@ -550,7 +573,7 @@ func (r *IssueRepository) ListEvents(ctx context.Context, projectID string, numb
 	limit := int(page.Limit)
 	var rows []eventRow
 	err := db.Raw(
-		`SELECT e.id, e.seq, e.issue_id, e.actor_uid, e.kind, e.data, e.created_at,
+		`SELECT e.id, e.seq, e.issue_id, e.actor_uid, e.agent_id, e.kind, e.data, e.created_at,
 		        c.id AS comment_id, c.author_uid AS comment_author_uid, c.body AS comment_body,
 		        c.created_at AS comment_created_at
 		   FROM issues.issue_events e

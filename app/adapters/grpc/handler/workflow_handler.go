@@ -35,6 +35,10 @@ func (h *IssueHandler) UpdateIssue(ctx context.Context, req *issuesv1.UpdateIssu
 		ids := append([]string{}, req.GetLabels().GetIds()...)
 		in.LabelIDs = &ids
 	}
+	if req.AssigneeActorId != nil {
+		id := req.GetAssigneeActorId()
+		in.AssigneeActorID = &id
+	}
 	issue, err := h.issueSvc.UpdateIssue(ctx, who, in)
 	if err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)
@@ -238,4 +242,35 @@ func (h *IssueHandler) ListIssueEvents(ctx context.Context, req *issuesv1.ListIs
 		Events: events,
 		Page:   mapper.PageResponseToProto(page.NextCursor, page.HasNext),
 	}, nil
+}
+
+// ImportIssue crea o actualiza un issue importado de otro tracker (issue
+// 025). Solo para quien importa: el gateway no la expone, y un agente no la
+// puede usar.
+func (h *IssueHandler) ImportIssue(ctx context.Context, req *issuesv1.ImportIssueRequest) (*issuesv1.ImportIssueResponse, error) {
+	uid, err := requirePerson(ctx)
+	if err != nil {
+		return nil, domainerrors.MapToGRPC(err, h.logger)
+	}
+	in := application.ImportIssueInput{
+		ProjectID:   req.GetProjectId(),
+		SourceKey:   req.GetSourceKey(),
+		Number:      req.GetNumber(),
+		Title:       req.GetTitle(),
+		Description: req.GetDescription(),
+		Priority:    mapper.PriorityFromProto(req.GetPriority()),
+		State:       mapper.IssueStateFromProto(req.GetState()),
+		LabelNames:  req.GetLabelNames(),
+	}
+	if req.CreatedAt != nil {
+		if err := req.GetCreatedAt().CheckValid(); err != nil {
+			return nil, domainerrors.MapToGRPC(domainerrors.ValidationError("invalid created_at", map[string]any{"field": "created_at"}), h.logger)
+		}
+		in.CreatedAt = req.GetCreatedAt().AsTime()
+	}
+	issue, outcome, err := h.issueSvc.ImportIssue(ctx, model.Author{UserID: uid}, in)
+	if err != nil {
+		return nil, domainerrors.MapToGRPC(err, h.logger)
+	}
+	return &issuesv1.ImportIssueResponse{Issue: mapper.IssueToProto(issue), Outcome: mapper.ImportOutcomeToProto(outcome)}, nil
 }

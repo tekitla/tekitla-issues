@@ -123,7 +123,7 @@ func projectStatuses(extra ...*model.Status) *mockStatusRepo {
 
 // newIssueSvc arma el service con los estados de default y sin etiquetas.
 func newIssueSvc(ws port.WorkspaceRepository, projects port.ProjectRepository, issues port.IssueRepository) *application.IssueService {
-	return application.NewIssueService(ws, projects, issues, projectStatuses(), &mockLabelRepo{})
+	return application.NewIssueService(ws, projects, issues, projectStatuses(), &mockLabelRepo{}, &mockActorRepo{})
 }
 
 func isUnauthenticated(err error) bool {
@@ -485,7 +485,7 @@ func TestListIssues_Filters(t *testing.T) {
 	labels := &mockLabelRepo{listFn: func(context.Context, string) ([]*model.Label, error) {
 		return []*model.Label{{ID: "l1"}, {ID: "l2"}}, nil
 	}}
-	svc := application.NewIssueService(personalWorkspaces(), ownedProjects(), issues, projectStatuses(), labels)
+	svc := application.NewIssueService(personalWorkspaces(), ownedProjects(), issues, projectStatuses(), labels, &mockActorRepo{})
 	_, err := svc.ListIssues(context.Background(), owner, application.ListIssuesInput{
 		ProjectID:  validID,
 		States:     []model.IssueState{model.IssueStateTodo, model.IssueStateInProgress, model.IssueStateTodo},

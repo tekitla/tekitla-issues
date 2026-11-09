@@ -117,5 +117,89 @@ check "down: el issue sigue descartado" "canceled" "SELECT state FROM issues.iss
 apply 000004_discard_search_status_settings.up
 check "up de nuevo: backfill" "0" "SELECT count(*) FROM issues.statuses WHERE hidden <> (category = 'canceled')"
 
+echo "== datos de 000004: una etiqueta puesta a mano"
+sql <<'SQL'
+INSERT INTO issues.labels (id, project_id, name, color)
+VALUES ('00000000-0000-4000-8000-0000000000c1', '00000000-0000-4000-8000-0000000000a1', 'backend', 1);
+INSERT INTO issues.issue_labels (issue_id, label_id)
+SELECT id, '00000000-0000-4000-8000-0000000000c1' FROM issues.issues
+ WHERE number = 1 AND project_id = '00000000-0000-4000-8000-0000000000a1';
+SQL
+EVENTS_BEFORE="$(sql "SELECT count(*) FROM issues.issue_events" | tr -d '\r')"
+
+apply 000005_actors_tokens_assignee_import.up
+
+echo "== 000005: los datos existentes no cambian de significado (CU-025-12)"
+check "issues sin asignar" "0" "SELECT count(*) FROM issues.issues WHERE assignee_actor_id IS NOT NULL"
+check "issues sin clave de origen" "0" "SELECT count(*) FROM issues.issues WHERE source_key IS NOT NULL"
+check "eventos sin agente" "0" "SELECT count(*) FROM issues.issue_events WHERE agent_id IS NOT NULL"
+check "eventos intactos" "$EVENTS_BEFORE" "SELECT count(*) FROM issues.issue_events"
+check "etiquetas existentes = a mano" "1|0" "SELECT count(*), count(*) FILTER (WHERE imported) FROM issues.issue_labels"
+check "sin DEFAULT en asignado, clave de origen y agente" "0" "SELECT count(*) FROM information_schema.columns
+  WHERE table_schema = 'issues' AND column_default IS NOT NULL AND (
+        (table_name = 'issues' AND column_name IN ('assignee_actor_id', 'source_key'))
+     OR (table_name = 'issue_events' AND column_name = 'agent_id'))"
+check "sin actores ni tokens" "0|0" "SELECT (SELECT count(*) FROM issues.actors), (SELECT count(*) FROM issues.tokens)"
+
+echo "== restricciones de 000005"
+P1=00000000-0000-4000-8000-0000000000d1
+A1=00000000-0000-4000-8000-0000000000d2
+TK=00000000-0000-4000-8000-0000000000a1
+sql "INSERT INTO issues.actors (id, kind, user_uid, display_name, created_at) VALUES ('$P1', 'person', 'u1', '', now())"
+sql "INSERT INTO issues.actors (id, kind, owner_actor_id, tool, display_name, created_at) VALUES ('$A1', 'agent', '$P1', 'codex', 'Codex PC-01', now())"
+must_fail "persona sin uid" "INSERT INTO issues.actors (id, kind, display_name, created_at) VALUES (gen_random_uuid(), 'person', '', now())"
+must_fail "uid repetido" "INSERT INTO issues.actors (id, kind, user_uid, display_name, created_at) VALUES (gen_random_uuid(), 'person', 'u1', '', now())"
+must_fail "agente sin dueño" "INSERT INTO issues.actors (id, kind, tool, display_name, created_at) VALUES (gen_random_uuid(), 'agent', 'codex', 'x', now())"
+must_fail "agente sin herramienta" "INSERT INTO issues.actors (id, kind, owner_actor_id, display_name, created_at) VALUES (gen_random_uuid(), 'agent', '$P1', 'x', now())"
+must_fail "herramienta desconocida" "INSERT INTO issues.actors (id, kind, owner_actor_id, tool, display_name, created_at) VALUES (gen_random_uuid(), 'agent', '$P1', 'gpt', 'x', now())"
+must_fail "agente sin nombre" "INSERT INTO issues.actors (id, kind, owner_actor_id, tool, display_name, created_at) VALUES (gen_random_uuid(), 'agent', '$P1', 'codex', '', now())"
+must_fail "persona con uid y dueño" "INSERT INTO issues.actors (id, kind, user_uid, owner_actor_id, display_name, created_at) VALUES (gen_random_uuid(), 'person', 'u9', '$P1', '', now())"
+must_fail "nombre de agente repetido (sin mayúsculas)" "INSERT INTO issues.actors (id, kind, owner_actor_id, tool, display_name, created_at) VALUES (gen_random_uuid(), 'agent', '$P1', 'cloud', 'codex pc-01', now())"
+sql "UPDATE issues.actors SET revoked_at = now() WHERE id = '$A1'"
+sql "INSERT INTO issues.actors (id, kind, owner_actor_id, tool, display_name, created_at) VALUES (gen_random_uuid(), 'agent', '$P1', 'codex', 'Codex PC-01', now())"
+echo "ok   el nombre de un agente revocado se puede reusar"
+HASH="decode(repeat('ab', 32), 'hex')"
+OTHER="decode(repeat('cd', 32), 'hex')"
+sql "INSERT INTO issues.tokens (id, actor_id, name, token_hash, scopes, created_at, expires_at)
+  VALUES (gen_random_uuid(), '$A1', 'ci', $HASH, ARRAY['issues:read', 'issues:write'], now(), now() + interval '30 days')"
+echo "ok   token con los dos scopes"
+must_fail "hash repetido" "INSERT INTO issues.tokens (id, actor_id, name, token_hash, scopes, created_at, expires_at)
+  VALUES (gen_random_uuid(), '$A1', '', $HASH, ARRAY['issues:read'], now(), now() + interval '1 day')"
+must_fail "hash que no es SHA-256" "INSERT INTO issues.tokens (id, actor_id, name, token_hash, scopes, created_at, expires_at)
+  VALUES (gen_random_uuid(), '$A1', '', decode('abcd', 'hex'), ARRAY['issues:read'], now(), now() + interval '1 day')"
+must_fail "sin scopes" "INSERT INTO issues.tokens (id, actor_id, name, token_hash, scopes, created_at, expires_at)
+  VALUES (gen_random_uuid(), '$A1', '', $OTHER, ARRAY[]::TEXT[], now(), now() + interval '1 day')"
+must_fail "scope desconocido" "INSERT INTO issues.tokens (id, actor_id, name, token_hash, scopes, created_at, expires_at)
+  VALUES (gen_random_uuid(), '$A1', '', $OTHER, ARRAY['issues:admin'], now(), now() + interval '1 day')"
+must_fail "vence antes de crearse" "INSERT INTO issues.tokens (id, actor_id, name, token_hash, scopes, created_at, expires_at)
+  VALUES (gen_random_uuid(), '$A1', '', $OTHER, ARRAY['issues:read'], now(), now())"
+must_fail "asignado inexistente" "UPDATE issues.issues SET assignee_actor_id = gen_random_uuid() WHERE number = 1"
+must_fail "agente de evento inexistente" "UPDATE issues.issue_events SET agent_id = gen_random_uuid()"
+must_fail "clave de origen vacía" "UPDATE issues.issues SET source_key = '' WHERE number = 1"
+sql "UPDATE issues.issues SET source_key = '001-a' WHERE number = 1 AND project_id = '$TK'"
+must_fail "clave de origen repetida en el proyecto" "UPDATE issues.issues SET source_key = '001-a' WHERE number = 2 AND project_id = '$TK'"
+sql "UPDATE issues.issues SET source_key = '001-a' WHERE project_id = '00000000-0000-4000-8000-0000000000a2'"
+echo "ok   la misma clave de origen en otro proyecto"
+sql "UPDATE issues.issues SET assignee_actor_id = '$A1' WHERE number = 1 AND project_id = '$TK'"
+sql "INSERT INTO issues.issue_events (id, issue_id, actor_uid, agent_id, kind, data)
+  SELECT gen_random_uuid(), id, 'u1', '$A1', 'assignee_changed', '{}'::jsonb
+    FROM issues.issues WHERE number = 1 AND project_id = '$TK'"
+sql "INSERT INTO issues.issue_labels (issue_id, label_id, imported)
+  SELECT id, '00000000-0000-4000-8000-0000000000c1', true FROM issues.issues WHERE number = 2 AND project_id = '$TK'"
+echo "ok   asignado, evento assignee_changed con agente y etiqueta importada"
+
+apply 000005_actors_tokens_assignee_import.down
+check "down: sin tablas nuevas" "0" "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'issues' AND table_name IN ('actors', 'tokens')"
+check "down: sin columnas nuevas" "0" "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'issues' AND (
+        (table_name = 'issues' AND column_name IN ('assignee_actor_id', 'source_key'))
+     OR (table_name = 'issue_events' AND column_name = 'agent_id')
+     OR (table_name = 'issue_labels' AND column_name = 'imported'))"
+check "down: sin eventos assignee_changed, el resto intacto" "$EVENTS_BEFORE" "SELECT count(*) FROM issues.issue_events"
+check "down: las etiquetas importadas quedan como comunes" "2" "SELECT count(*) FROM issues.issue_labels"
+
+apply 000005_actors_tokens_assignee_import.up
+check "up de nuevo: issues sin asignar y etiquetas a mano" "0|0" "SELECT (SELECT count(*) FROM issues.issues WHERE assignee_actor_id IS NOT NULL),
+  (SELECT count(*) FROM issues.issue_labels WHERE imported)"
+
 if [ "$fails" -ne 0 ]; then echo "Migraciones: con fallas"; exit 1; fi
 echo "Migraciones: todo ok"

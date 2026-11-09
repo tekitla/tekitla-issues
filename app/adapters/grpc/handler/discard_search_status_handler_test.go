@@ -35,6 +35,11 @@ func memMatches(it *model.Issue, f port.IssueFilter) bool {
 	if len(f.LabelIDs) > 0 && !slices.ContainsFunc(it.LabelIDs, func(id string) bool { return slices.Contains(f.LabelIDs, id) }) {
 		return false
 	}
+	if len(f.AssigneeActorIDs) > 0 || f.Unassigned {
+		if !slices.Contains(f.AssigneeActorIDs, it.AssigneeActorID) && !(f.Unassigned && it.AssigneeActorID == "") {
+			return false
+		}
+	}
 	if s := f.Search; s.Text != "" {
 		return strings.Contains(strings.ToLower(it.Title), strings.ToLower(s.Text)) || (s.Number > 0 && it.Number == s.Number)
 	}

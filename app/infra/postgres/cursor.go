@@ -59,7 +59,15 @@ func issueFilterFingerprint(f port.IssueFilter) string {
 	sort.Ints(priorities)
 	sort.Strings(statusIDs)
 	sort.Strings(labelIDs)
-	b, err := json.Marshal([]any{f.ProjectID, states, statusIDs, priorities, labelIDs, f.Search.Text, f.Search.Number, string(f.Order)})
+	fields := []any{f.ProjectID, states, statusIDs, priorities, labelIDs, f.Search.Text, f.Search.Number, string(f.Order)}
+	if len(f.AssigneeActorIDs) > 0 || f.Unassigned {
+		// Solo con el filtro de asignado (v0.5): sin él, la huella de un
+		// cursor de v0.4 sigue valiendo.
+		assignees := append([]string(nil), f.AssigneeActorIDs...)
+		sort.Strings(assignees)
+		fields = append(fields, assignees, f.Unassigned)
+	}
+	b, err := json.Marshal(fields)
 	if err != nil {
 		// Solo strings e ints: no puede fallar.
 		panic(fmt.Sprintf("issueFilterFingerprint: %v", err))

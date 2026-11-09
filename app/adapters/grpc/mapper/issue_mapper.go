@@ -58,7 +58,23 @@ func IssueToProto(m *model.Issue) *issuesv1.Issue {
 		Discard:     DiscardToProto(m.Discard),
 		CreatedAt:   TimestampToProto(m.CreatedAt),
 		UpdatedAt:   TimestampToProto(m.UpdatedAt),
+
+		AssigneeActorId: m.AssigneeActorID,
+		SourceKey:       m.SourceKey,
 	}
+}
+
+// ImportOutcomeToProto convierte el resultado de ImportIssue.
+func ImportOutcomeToProto(o model.ImportOutcome) issuesv1.ImportOutcome {
+	switch o {
+	case model.ImportCreated:
+		return issuesv1.ImportOutcome_IMPORT_OUTCOME_CREATED
+	case model.ImportUpdated:
+		return issuesv1.ImportOutcome_IMPORT_OUTCOME_UPDATED
+	case model.ImportUnchanged:
+		return issuesv1.ImportOutcome_IMPORT_OUTCOME_UNCHANGED
+	}
+	return issuesv1.ImportOutcome_IMPORT_OUTCOME_UNSPECIFIED
 }
 
 // DiscardToProto convierte el motivo del descarte (nil -> ausente).
