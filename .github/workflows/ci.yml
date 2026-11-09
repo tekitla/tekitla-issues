@@ -3,7 +3,7 @@
 # disparado por tag
 # =============================================================================
 #
-#   - Pull request   -> solo `test` (sin deploy).
+#   - Pull request   -> solo `test` (con govulncheck; sin deploy).
 #   - Tag qa-v*      -> test + build + push + deploy a QA.
 #   - Tag prod-v*    -> test + guard + build + push + deploy a prod, SALVO que
 #                       el release toque `migrations/`: `guard-prod` falla y el
@@ -43,6 +43,7 @@ permissions:
 
 env:
   GO_VERSION: "1.26.10"
+  GOVULNCHECK_VERSION: v1.8.0
   GOWORK: "off"
   GOPRIVATE: "github.com/tekitla/tekitla-protos"
 
@@ -83,6 +84,10 @@ jobs:
           go mod verify
           go vet ./...
           go test ./... -count=1 -timeout=120s
+
+      # Vulnerabilidades ALCANZABLES en dependencias y stdlib (mismo criterio que el gateway).
+      - name: govulncheck
+        run: go run "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}" ./...
 
       - name: Vendor
         if: github.event_name != 'pull_request'

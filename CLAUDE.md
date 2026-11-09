@@ -172,6 +172,7 @@ docker compose up -d --wait postgres   # solo la base, para `make run`
 make run                      # levanta el servicio (lee .env.dev)
 make test                     # go test ./... -count=1
 make lint                     # gofmt + go vet (+ golangci-lint si está)
+make vuln                     # govulncheck (también corre en el CI)
 make build                    # bin/issues-service
 go mod tidy                   # después de tocar imports
 make workspace / workspace-off  # co-desarrollar con un checkout local de los protos
