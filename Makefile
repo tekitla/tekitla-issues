@@ -5,8 +5,9 @@
 PROTOS_DIR ?= ../tekitla-protos
 
 BIN := bin/issues-service
+GOVULNCHECK_VERSION := v1.8.0
 
-.PHONY: help run build test test-race test-migrations vet fmt lint tidy vendor up down logs clean workspace workspace-off
+.PHONY: help run build test test-race test-migrations vet fmt lint vuln tidy vendor up down logs clean workspace workspace-off
 
 ## help: lista los targets
 help:
@@ -44,6 +45,10 @@ fmt:
 lint: vet
 	@out="$$(gofmt -l app cli)"; if [ -n "$$out" ]; then echo "gofmt pendiente en:"; echo "$$out"; exit 1; fi
 	@if command -v golangci-lint >/dev/null 2>&1; then golangci-lint run ./...; else echo "golangci-lint no instalado: solo gofmt + vet"; fi
+
+## vuln: govulncheck (vulnerabilidades alcanzables en dependencias y stdlib)
+vuln:
+	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 
 ## tidy: go mod tidy
 tidy:
