@@ -211,7 +211,7 @@ func newClients(t *testing.T) clients {
 	h := handler.NewIssueHandler(zap.NewNop(),
 		application.NewProjectService(workspaces, projects),
 		application.NewIssueService(workspaces, projects, issues, statuses, labels, actors),
-		application.NewStatusService(workspaces, projects, statuses),
+		application.NewStatusService(workspaces, projects, statuses, actors),
 		application.NewLabelService(workspaces, projects, labels),
 	)
 

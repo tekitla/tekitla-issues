@@ -47,9 +47,11 @@ func requireAuthor(ctx context.Context) (model.Author, error) {
 	}
 	agentID := agentIDFrom(ctx)
 	if agentID != "" {
-		if _, err := uuid.Parse(agentID); err != nil {
+		parsed, err := uuid.Parse(agentID)
+		if err != nil {
 			return model.Author{}, domainerrors.UnauthorizedError("invalid agent identity", map[string]any{"metadata": MetadataAgentID})
 		}
+		agentID = parsed.String()
 	}
 	return model.Author{UserID: uid, AgentID: agentID}, nil
 }

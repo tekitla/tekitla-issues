@@ -13,6 +13,22 @@ import (
 type projectGuard struct {
 	workspaces workspaces
 	projects   port.ProjectRepository
+	// actors verifica el agente de las escrituras (ensureAuthor).
+	actors actorAccess
+}
+
+// ensureAuthor es ensure para una escritura: además, si la hace un agente,
+// verifica que sea un agente activo de la persona (defensa en profundidad:
+// el gateway ya lo resolvió, pero su caché puede tener hasta 60 s).
+func (g projectGuard) ensureAuthor(ctx context.Context, who model.Author, projectID string) ([]string, error) {
+	workspaceIDs, err := g.ensure(ctx, who.UserID, projectID)
+	if err != nil {
+		return nil, err
+	}
+	if err := g.actors.activeAgent(ctx, who); err != nil {
+		return nil, err
+	}
+	return workspaceIDs, nil
 }
 
 // ensure valida el usuario y el project_id y verifica que el proyecto sea de

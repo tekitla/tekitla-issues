@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -82,7 +83,7 @@ func (s *ActorService) CreateAgent(ctx context.Context, uid string, in CreateAge
 	if err != nil {
 		return nil, err
 	}
-	if in.OwnerActorID != "" && in.OwnerActorID != person.ID {
+	if in.OwnerActorID != "" && canonical(in.OwnerActorID) != person.ID {
 		return nil, domainerrors.PermissionDeniedError("an agent can only be created for yourself", map[string]any{"field": "owner_actor_id"})
 	}
 	if person.IsRevoked() {
@@ -108,7 +109,8 @@ func (s *ActorService) CreateAgent(ctx context.Context, uid string, in CreateAge
 // RevokeActor revoca a la persona del usuario (con sus agentes) o a uno de
 // sus agentes. No se deshace; uno ya revocado se devuelve tal cual.
 func (s *ActorService) RevokeActor(ctx context.Context, uid, actorID string) (*model.Actor, error) {
-	if err := validateUUID("actor_id", actorID); err != nil {
+	actorID, err := canonicalUUID("actor_id", actorID)
+	if err != nil {
 		return nil, err
 	}
 	now := s.now()
@@ -136,10 +138,11 @@ func (s *ActorService) CreateToken(ctx context.Context, uid string, in CreateTok
 	}
 	actor := person
 	if in.ActorID != "" {
-		if err := validateUUID("actor_id", in.ActorID); err != nil {
+		id, err := canonicalUUID("actor_id", in.ActorID)
+		if err != nil {
 			return nil, "", err
 		}
-		if actor, err = s.actors.owned(ctx, person, in.ActorID); err != nil {
+		if actor, err = s.actors.owned(ctx, person, id); err != nil {
 			return nil, "", err
 		}
 	}
@@ -187,10 +190,11 @@ func (s *ActorService) ListTokens(ctx context.Context, uid, actorID string, incl
 		return nil, err
 	}
 	if actorID != "" {
-		if !contains(ids, actorID) {
+		id := canonical(actorID)
+		if !slices.Contains(ids, id) {
 			return nil, actorNotFound(actorID)
 		}
-		ids = []string{actorID}
+		ids = []string{id}
 	}
 	return s.tokens.List(ctx, ids, includeInactive, now)
 }
@@ -198,7 +202,8 @@ func (s *ActorService) ListTokens(ctx context.Context, uid, actorID string, incl
 // RevokeToken revoca un token de la persona del usuario o de sus agentes.
 // No se deshace; uno ya revocado se devuelve tal cual.
 func (s *ActorService) RevokeToken(ctx context.Context, uid, tokenID string) (*model.Token, error) {
-	if err := validateUUID("token_id", tokenID); err != nil {
+	tokenID, err := canonicalUUID("token_id", tokenID)
+	if err != nil {
 		return nil, err
 	}
 	now := s.now()
@@ -207,7 +212,7 @@ func (s *ActorService) RevokeToken(ctx context.Context, uid, tokenID string) (*m
 		return nil, err
 	}
 	token, err := s.tokens.Get(ctx, tokenID)
-	if domainerrors.IsNotFound(err) || (err == nil && !contains(ids, token.ActorID)) {
+	if domainerrors.IsNotFound(err) || (err == nil && !slices.Contains(ids, token.ActorID)) {
 		return nil, domainerrors.NotFoundError("token not found", map[string]any{"id": tokenID})
 	}
 	if err != nil {
@@ -298,28 +303,80 @@ func (a actorAccess) owned(ctx context.Context, person *model.Actor, actorID str
 }
 
 // assignable valida un asignado: un actor que el usuario puede ver (él o uno
-// de sus agentes) y no revocado. Cualquier otro caso es ValidationError
-// sobre field (un actor ajeno no se distingue de uno inexistente).
-func (a actorAccess) assignable(ctx context.Context, uid, field, actorID string, now time.Time) error {
+// de sus agentes) y no revocado. Devuelve el id en forma canónica. Cualquier
+// otro caso es ValidationError sobre field (un actor ajeno no se distingue
+// de uno inexistente).
+func (a actorAccess) assignable(ctx context.Context, uid, field, actorID string, now time.Time) (string, error) {
 	invalid := domainerrors.ValidationError("assignee is not an active actor you can see", map[string]any{"field": field, "value": actorID})
-	if _, err := uuid.Parse(actorID); err != nil {
-		return invalid
+	parsed, err := uuid.Parse(actorID)
+	if err != nil {
+		return "", invalid
 	}
+	actorID = parsed.String()
 	person, err := a.person(ctx, uid, now)
 	if err != nil {
-		return err
+		return "", err
 	}
 	actor, err := a.owned(ctx, person, actorID)
 	if domainerrors.IsNotFound(err) {
-		return invalid
+		return "", invalid
+	}
+	if err != nil {
+		return "", err
+	}
+	if actor.IsRevoked() || person.IsRevoked() {
+		return "", invalid
+	}
+	return actorID, nil
+}
+
+// activeAgent verifica el agente de una escritura: si who trae uno, tiene
+// que existir, ser un agente activo y ser de una persona activa con el uid
+// de who. Si no, Unauthorized (el gateway no debería mandarlo).
+func (a actorAccess) activeAgent(ctx context.Context, who model.Author) error {
+	if who.AgentID == "" {
+		return nil
+	}
+	bad := domainerrors.UnauthorizedError("agent is not an active agent of the user", map[string]any{"metadata": "x-agent-id"})
+	agent, err := a.repo.Get(ctx, who.AgentID)
+	if domainerrors.IsNotFound(err) {
+		return bad
 	}
 	if err != nil {
 		return err
 	}
-	if actor.IsRevoked() || person.IsRevoked() {
-		return invalid
+	if agent.Kind != model.ActorKindAgent || agent.IsRevoked() {
+		return bad
+	}
+	owner, err := a.repo.Get(ctx, agent.OwnerActorID)
+	if domainerrors.IsNotFound(err) {
+		return bad
+	}
+	if err != nil {
+		return err
+	}
+	if owner.UserUID != who.UserID || owner.IsRevoked() {
+		return bad
 	}
 	return nil
+}
+
+// canonicalUUID valida un UUID de entrada y lo devuelve en forma canónica
+// (minúsculas con guiones): así se compara con los ids guardados.
+func canonicalUUID(field, id string) (string, error) {
+	if err := validateUUID(field, id); err != nil {
+		return "", err
+	}
+	return canonical(id), nil
+}
+
+// canonical devuelve la forma canónica de un UUID (o el id tal cual si no
+// lo es: entonces no coincide con ninguno guardado).
+func canonical(id string) string {
+	if u, err := uuid.Parse(id); err == nil {
+		return u.String()
+	}
+	return id
 }
 
 func actorNotFound(id string) error {
@@ -328,13 +385,4 @@ func actorNotFound(id string) error {
 
 func actorRevoked(id string) error {
 	return domainerrors.FailedPreconditionError("actor is revoked", map[string]any{"actor_id": id}).WithReason("ACTOR_REVOKED")
-}
-
-func contains(ids []string, id string) bool {
-	for _, v := range ids {
-		if v == id {
-			return true
-		}
-	}
-	return false
 }

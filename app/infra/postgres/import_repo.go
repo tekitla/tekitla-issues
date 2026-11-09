@@ -51,8 +51,12 @@ func (r *IssueRepository) Import(ctx context.Context, workspaceIDs []string, spe
 			return err
 		}
 		if len(existing) == 0 {
-			out, err = importCreate(tx, spec, statuses, author, details)
+			if _, err := importCreate(tx, spec, statuses, author, details); err != nil {
+				return err
+			}
 			outcome = model.ImportCreated
+			// Se relee: así la respuesta trae las etiquetas que se pusieron.
+			out, err = getIssue(tx, spec.ProjectID, spec.Number)
 			return err
 		}
 		cur := fromIssueRow(&existing[0])
@@ -234,7 +238,7 @@ func syncImportedLabels(tx *gorm.DB, issue *model.Issue, names []string, author 
 		return false, nil
 	}
 	if len(current)+len(change.Added)-len(change.Removed) > model.MaxLabelsPerIssue {
-		return false, domainerrors.ValidationError("too many labels", map[string]any{"field": "label_names", "max": model.MaxLabelsPerIssue})
+		return false, model.TooManyLabelsError()
 	}
 	if err := fillLabelNames(tx, change.Removed); err != nil {
 		return false, err

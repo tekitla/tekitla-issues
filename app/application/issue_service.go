@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -36,7 +37,7 @@ func NewIssueService(
 	actors port.ActorRepository,
 ) *IssueService {
 	return &IssueService{
-		guard:    projectGuard{workspaces: workspaces{repo: workspaceRepo}, projects: projects},
+		guard:    projectGuard{workspaces: workspaces{repo: workspaceRepo}, projects: projects, actors: actorAccess{repo: actors}},
 		issues:   issues,
 		statuses: statuses,
 		labels:   labels,
@@ -167,8 +168,8 @@ func (s *IssueService) ListIssues(ctx context.Context, ownerUID string, in ListI
 	// los pedidos son así y no se piden los sin asignar, no hay nada que
 	// traer.
 	for _, id := range unique(in.AssigneeActorIDs) {
-		if _, err := uuid.Parse(id); err == nil {
-			filter.AssigneeActorIDs = append(filter.AssigneeActorIDs, id)
+		if u, err := uuid.Parse(id); err == nil && !slices.Contains(filter.AssigneeActorIDs, u.String()) {
+			filter.AssigneeActorIDs = append(filter.AssigneeActorIDs, u.String())
 		}
 	}
 	filter.Unassigned = in.Unassigned
@@ -214,7 +215,7 @@ func (s *IssueService) GetIssue(ctx context.Context, ownerUID, projectID string,
 // CreateIssue crea un issue en el primer estado «por hacer» del proyecto, con
 // el siguiente número y al final de su orden.
 func (s *IssueService) CreateIssue(ctx context.Context, who model.Author, in CreateIssueInput) (*model.Issue, error) {
-	workspaceIDs, err := s.guard.ensure(ctx, who.UserID, in.ProjectID)
+	workspaceIDs, err := s.guard.ensureAuthor(ctx, who, in.ProjectID)
 	if err != nil {
 		return nil, err
 	}
@@ -242,8 +243,9 @@ func (s *IssueService) CreateIssue(ctx context.Context, who model.Author, in Cre
 		// DeleteStatus nunca deja una categoría vacía: es un problema de datos.
 		return nil, domainerrors.InternalError("project has no todo status", map[string]any{"project_id": in.ProjectID})
 	}
+	assignee := ""
 	if in.AssigneeActorID != "" {
-		if err := s.actors.assignable(ctx, who.UserID, "assignee_actor_id", in.AssigneeActorID, s.now()); err != nil {
+		if assignee, err = s.actors.assignable(ctx, who.UserID, "assignee_actor_id", in.AssigneeActorID, s.now()); err != nil {
 			return nil, err
 		}
 	}
@@ -257,7 +259,7 @@ func (s *IssueService) CreateIssue(ctx context.Context, who model.Author, in Cre
 		StatusID:    todo.ID,
 		Priority:    priority,
 
-		AssigneeActorID: in.AssigneeActorID,
+		AssigneeActorID: assignee,
 	}
 	return s.issues.Create(ctx, workspaceIDs, issue, who)
 }
@@ -265,7 +267,7 @@ func (s *IssueService) CreateIssue(ctx context.Context, who model.Author, in Cre
 // MoveIssue cambia el estado de un issue y, opcionalmente, su lugar en la
 // columna destino.
 func (s *IssueService) MoveIssue(ctx context.Context, who model.Author, in MoveIssueInput) (*model.Issue, error) {
-	if _, err := s.guard.ensure(ctx, who.UserID, in.ProjectID); err != nil {
+	if _, err := s.guard.ensureAuthor(ctx, who, in.ProjectID); err != nil {
 		return nil, err
 	}
 	if err := validateIssueNumber(in.Number); err != nil {
@@ -315,7 +317,7 @@ func (s *IssueService) MoveIssue(ctx context.Context, who model.Author, in MoveI
 // DiscardIssue descarta un issue con un motivo: lo pasa a un estado CANCELED
 // (el pedido o el primero) conservando su lugar.
 func (s *IssueService) DiscardIssue(ctx context.Context, who model.Author, in DiscardIssueInput) (*model.Issue, error) {
-	if _, err := s.guard.ensure(ctx, who.UserID, in.ProjectID); err != nil {
+	if _, err := s.guard.ensureAuthor(ctx, who, in.ProjectID); err != nil {
 		return nil, err
 	}
 	if err := validateIssueNumber(in.Number); err != nil {
@@ -348,7 +350,7 @@ func (s *IssueService) DiscardIssue(ctx context.Context, who model.Author, in Di
 // RestoreIssue restaura un issue descartado: lo pasa al primer estado «por
 // hacer», al final de esa columna.
 func (s *IssueService) RestoreIssue(ctx context.Context, who model.Author, projectID string, number int32) (*model.Issue, error) {
-	if _, err := s.guard.ensure(ctx, who.UserID, projectID); err != nil {
+	if _, err := s.guard.ensureAuthor(ctx, who, projectID); err != nil {
 		return nil, err
 	}
 	if err := validateIssueNumber(number); err != nil {
@@ -360,7 +362,7 @@ func (s *IssueService) RestoreIssue(ctx context.Context, who model.Author, proje
 // UpdateIssue edita título, descripción, prioridad o etiquetas de un issue.
 // Sin cambios pedidos devuelve el issue tal cual.
 func (s *IssueService) UpdateIssue(ctx context.Context, who model.Author, in UpdateIssueInput) (*model.Issue, error) {
-	if _, err := s.guard.ensure(ctx, who.UserID, in.ProjectID); err != nil {
+	if _, err := s.guard.ensureAuthor(ctx, who, in.ProjectID); err != nil {
 		return nil, err
 	}
 	if err := validateIssueNumber(in.Number); err != nil {
@@ -407,10 +409,19 @@ func (s *IssueService) buildPatch(ctx context.Context, uid string, in UpdateIssu
 		patch.LabelIDs = &ids
 	}
 	if in.AssigneeActorID != nil {
-		id := *in.AssigneeActorID
+		id := canonical(*in.AssigneeActorID)
 		if id != "" {
-			if err := s.actors.assignable(ctx, uid, "assignee_actor_id", id, s.now()); err != nil {
+			// El asignado actual se acepta aunque ya no sea asignable (p. ej.
+			// un agente revocado): un cliente que manda el estado completo
+			// tiene que poder editar el resto.
+			cur, err := s.issues.GetByNumber(ctx, in.ProjectID, in.Number)
+			if err != nil {
 				return patch, err
+			}
+			if cur.AssigneeActorID != id {
+				if id, err = s.actors.assignable(ctx, uid, "assignee_actor_id", id, s.now()); err != nil {
+					return patch, err
+				}
 			}
 		}
 		patch.AssigneeActorID = &id
@@ -422,7 +433,7 @@ func (s *IssueService) buildPatch(ctx context.Context, uid string, in UpdateIssu
 // conservando su número (issue 025). Es idempotente por SourceKey: sin
 // cambios no escribe nada y devuelve model.ImportUnchanged.
 func (s *IssueService) ImportIssue(ctx context.Context, who model.Author, in ImportIssueInput) (*model.Issue, model.ImportOutcome, error) {
-	workspaceIDs, err := s.guard.ensure(ctx, who.UserID, in.ProjectID)
+	workspaceIDs, err := s.guard.ensureAuthor(ctx, who, in.ProjectID)
 	if err != nil {
 		return nil, "", err
 	}
@@ -452,8 +463,13 @@ func (s *IssueService) ImportIssue(ctx context.Context, who model.Author, in Imp
 	if spec.LabelNames, err = model.NormalizeImportLabels(in.LabelNames); err != nil {
 		return nil, "", err
 	}
+	now := s.now()
 	if spec.CreatedAt.IsZero() {
-		spec.CreatedAt = s.now()
+		spec.CreatedAt = now
+	}
+	// Un día de margen por las zonas horarias de una fecha sin hora.
+	if spec.CreatedAt.After(now.Add(24 * time.Hour)) {
+		return nil, "", domainerrors.ValidationError("created_at must not be in the future", map[string]any{"field": "created_at"})
 	}
 	return s.issues.Import(ctx, workspaceIDs, spec, who)
 }
@@ -492,7 +508,7 @@ func (s *IssueService) projectLabelIDs(ctx context.Context, projectID string, id
 
 // CreateComment comenta un issue.
 func (s *IssueService) CreateComment(ctx context.Context, who model.Author, projectID string, number int32, body string) (*model.Comment, error) {
-	if _, err := s.guard.ensure(ctx, who.UserID, projectID); err != nil {
+	if _, err := s.guard.ensureAuthor(ctx, who, projectID); err != nil {
 		return nil, err
 	}
 	if err := validateIssueNumber(number); err != nil {

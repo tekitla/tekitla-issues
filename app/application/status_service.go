@@ -19,9 +19,9 @@ type StatusService struct {
 }
 
 // NewStatusService construye el servicio.
-func NewStatusService(workspaceRepo port.WorkspaceRepository, projects port.ProjectRepository, statuses port.StatusRepository) *StatusService {
+func NewStatusService(workspaceRepo port.WorkspaceRepository, projects port.ProjectRepository, statuses port.StatusRepository, actors port.ActorRepository) *StatusService {
 	return &StatusService{
-		guard:    projectGuard{workspaces: workspaces{repo: workspaceRepo}, projects: projects},
+		guard:    projectGuard{workspaces: workspaces{repo: workspaceRepo}, projects: projects, actors: actorAccess{repo: actors}},
 		statuses: statuses,
 	}
 }
@@ -153,7 +153,7 @@ func (s *StatusService) UpdateStatus(ctx context.Context, ownerUID string, in Up
 // BatchUpdateStatuses guarda la lista completa de estados de una vez, todo
 // o nada (ver model.PlanStatusBatch). Devuelve los estados por rank.
 func (s *StatusService) BatchUpdateStatuses(ctx context.Context, who model.Author, in BatchUpdateStatusesInput) ([]*model.Status, error) {
-	if _, err := s.guard.ensure(ctx, who.UserID, in.ProjectID); err != nil {
+	if _, err := s.guard.ensureAuthor(ctx, who, in.ProjectID); err != nil {
 		return nil, err
 	}
 	// Los ids se validan como UUID antes de llegar a la base; que sean del
@@ -181,7 +181,7 @@ func (s *StatusService) BatchUpdateStatuses(ctx context.Context, who model.Autho
 
 // DeleteStatus borra un estado y pasa sus issues a moveToStatusID.
 func (s *StatusService) DeleteStatus(ctx context.Context, who model.Author, projectID, statusID, moveToStatusID string) error {
-	if _, err := s.guard.ensure(ctx, who.UserID, projectID); err != nil {
+	if _, err := s.guard.ensureAuthor(ctx, who, projectID); err != nil {
 		return err
 	}
 	if err := validateUUID("status_id", statusID); err != nil {

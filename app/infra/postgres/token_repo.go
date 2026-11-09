@@ -123,22 +123,26 @@ type resolvedRow struct {
 	OwnerID      *string
 	OwnerUserUID *string
 	OwnerKind    *string
+	LastUsedAt   *time.Time
 }
 
-// Resolve busca el token activo con ese hash y marca su uso, en una sola
-// sentencia (UPDATE ... FROM ... RETURNING).
+// lastUsedEvery: last_used_at se actualiza como mucho una vez por minuto
+// por token (es aproximado igual: el gateway guarda 60 s en caché). Así la
+// ruta caliente de la autenticación casi nunca escribe ni toma locks.
+const lastUsedEvery = time.Minute
+
+// Resolve busca el token activo con ese hash (un SELECT sin locks) y, si su
+// último uso tiene más de lastUsedEvery, lo marca.
 func (r *TokenRepository) Resolve(ctx context.Context, hash []byte, now time.Time) (*model.ResolvedToken, error) {
+	db := r.db.WithContext(ctx)
 	var rows []resolvedRow
-	err := r.db.WithContext(ctx).Raw(
-		`UPDATE issues.tokens t
-		    SET last_used_at = ?
-		   FROM issues.actors a
-		   LEFT JOIN issues.actors o ON o.id = a.owner_actor_id
-		  WHERE t.token_hash = ? AND a.id = t.actor_id AND `+tokenActive+`
-		RETURNING t.id, array_to_string(t.scopes, ',') AS scopes, t.expires_at,
-		          a.id AS actor_id, a.kind AS actor_kind, a.user_uid AS actor_user_uid,
-		          o.id AS owner_id, o.user_uid AS owner_user_uid, o.kind AS owner_kind`,
-		now, hash, now,
+	err := db.Raw(
+		`SELECT t.id, array_to_string(t.scopes, ',') AS scopes, t.expires_at, t.last_used_at,
+		        a.id AS actor_id, a.kind AS actor_kind, a.user_uid AS actor_user_uid,
+		        o.id AS owner_id, o.user_uid AS owner_user_uid, o.kind AS owner_kind
+		   `+tokenJoins+`
+		  WHERE t.token_hash = ? AND `+tokenActive,
+		hash, now,
 	).Scan(&rows).Error
 	if err != nil {
 		return nil, translateError(err, "token", "resolve", nil)
@@ -147,6 +151,14 @@ func (r *TokenRepository) Resolve(ctx context.Context, hash []byte, now time.Tim
 		return nil, domainerrors.NotFoundError("token not found", nil)
 	}
 	row := rows[0]
+	if row.LastUsedAt == nil || now.Sub(*row.LastUsedAt) >= lastUsedEvery {
+		err := db.Exec(`UPDATE issues.tokens SET last_used_at = ?
+		                 WHERE id = ? AND (last_used_at IS NULL OR last_used_at <= ?)`,
+			now, row.ID, now.Add(-lastUsedEvery)).Error
+		if err != nil {
+			return nil, translateError(err, "token", "resolve", nil)
+		}
+	}
 	out := &model.ResolvedToken{TokenID: row.ID, Scopes: splitScopes(row.Scopes), ExpiresAt: row.ExpiresAt}
 	switch {
 	case row.ActorKind == string(model.ActorKindPerson) && row.ActorUserUID != nil:

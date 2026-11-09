@@ -66,11 +66,13 @@ func NormalizeImportLabels(names []string) ([]string, error) {
 		out = append(out, name)
 	}
 	if len(out) > MaxLabelsPerIssue {
-		return nil, tooManyLabels()
+		return nil, TooManyLabelsError()
 	}
 	return out, nil
 }
 
-func tooManyLabels() error {
+// TooManyLabelsError es el error de pasarse de MaxLabelsPerIssue con las
+// etiquetas de un import.
+func TooManyLabelsError() error {
 	return domainerrors.ValidationError("too many labels", map[string]any{"field": "label_names", "max": MaxLabelsPerIssue})
 }

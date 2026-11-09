@@ -55,7 +55,7 @@ func main() {
 	// 4. Servicios de aplicación
 	projectSvc := application.NewProjectService(workspaceRepo, projectRepo)
 	issueSvc := application.NewIssueService(workspaceRepo, projectRepo, issueRepo, statusRepo, labelRepo, actorRepo)
-	statusSvc := application.NewStatusService(workspaceRepo, projectRepo, statusRepo)
+	statusSvc := application.NewStatusService(workspaceRepo, projectRepo, statusRepo, actorRepo)
 	labelSvc := application.NewLabelService(workspaceRepo, projectRepo, labelRepo)
 	actorSvc := application.NewActorService(actorRepo, tokenRepo)
 

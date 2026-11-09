@@ -13,6 +13,7 @@ import (
 	"github.com/tekitla/tekitla-issues/app/application"
 	domainerrors "github.com/tekitla/tekitla-issues/app/domain/errors"
 	"github.com/tekitla/tekitla-issues/app/domain/model"
+	"github.com/tekitla/tekitla-issues/app/domain/port"
 )
 
 var clockNow = time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)
@@ -184,11 +185,22 @@ func TestActorService_AgentsAndRevocation(t *testing.T) {
 func TestIssueService_AssigneeValidation(t *testing.T) {
 	ctx := context.Background()
 	var gotPatch model.IssuePatch
-	issues := &mockIssueRepo{updateFn: func(_ context.Context, _ string, _ int32, patch model.IssuePatch, _ model.Author) (*model.Issue, error) {
-		gotPatch = patch
-		return &model.Issue{}, nil
-	}}
+	current := ""
+	issues := &mockIssueRepo{
+		updateFn: func(_ context.Context, _ string, _ int32, patch model.IssuePatch, _ model.Author) (*model.Issue, error) {
+			gotPatch = patch
+			return &model.Issue{}, nil
+		},
+		getByNumberFn: func(context.Context, string, int32) (*model.Issue, error) {
+			return &model.Issue{AssigneeActorID: current}, nil
+		},
+	}
 	svc := application.NewIssueService(personalWorkspaces(), ownedProjects(), issues, projectStatuses(), &mockLabelRepo{}, actorsOf(false))
+	// Un UUID en mayúsculas se guarda en forma canónica.
+	upper := strings.ToUpper(agentID)
+	if _, err := svc.UpdateIssue(ctx, as(owner), application.UpdateIssueInput{ProjectID: validID, Number: 1, AssigneeActorID: &upper}); err != nil || *gotPatch.AssigneeActorID != agentID {
+		t.Errorf("assign uppercase id: %v %v", err, gotPatch.AssigneeActorID)
+	}
 	for _, id := range []string{agentID, personID, ""} {
 		id := id
 		if _, err := svc.UpdateIssue(ctx, as(owner), application.UpdateIssueInput{ProjectID: validID, Number: 1, AssigneeActorID: &id}); err != nil || *gotPatch.AssigneeActorID != id {
@@ -204,6 +216,53 @@ func TestIssueService_AssigneeValidation(t *testing.T) {
 	revokedSvc := application.NewIssueService(personalWorkspaces(), ownedProjects(), issues, projectStatuses(), &mockLabelRepo{}, actorsOf(true))
 	if _, err := revokedSvc.CreateIssue(ctx, as(owner), application.CreateIssueInput{ProjectID: validID, Title: "x", AssigneeActorID: agentID}); !domainerrors.IsValidation(err) {
 		t.Errorf("assign an agent of a revoked person: %v", err)
+	}
+	// El asignado actual se acepta aunque ya no sea asignable: editar el
+	// resto mandando el estado completo no falla.
+	current = agentID
+	title := "nuevo"
+	if _, err := revokedSvc.UpdateIssue(ctx, as(owner), application.UpdateIssueInput{ProjectID: validID, Number: 1, Title: &title, AssigneeActorID: &current}); err != nil {
+		t.Errorf("keep a revoked assignee: %v", err)
+	}
+}
+
+// Defensa en profundidad: una escritura con x-agent-id exige un agente
+// activo de la persona.
+func TestIssueService_AgentMustBeActiveAndOwned(t *testing.T) {
+	ctx := context.Background()
+	issues := &mockIssueRepo{moveFn: func(context.Context, string, int32, *model.Status, port.Placement, model.Author) (*model.Issue, error) {
+		return &model.Issue{}, nil
+	}}
+	move := func(actors *mockActorRepo, who model.Author) error {
+		svc := application.NewIssueService(personalWorkspaces(), ownedProjects(), issues, projectStatuses(), &mockLabelRepo{}, actors)
+		_, err := svc.MoveIssue(ctx, who, application.MoveIssueInput{ProjectID: validID, Number: 1, StatusID: stDoing.ID})
+		return err
+	}
+	actors := actorsOf(false)
+	actors.getFn = func(_ context.Context, id string) (*model.Actor, error) {
+		switch id {
+		case agentID:
+			return &model.Actor{ID: agentID, Kind: model.ActorKindAgent, OwnerActorID: personID}, nil
+		case personID:
+			return &model.Actor{ID: personID, Kind: model.ActorKindPerson, UserUID: owner}, nil
+		case otherAgent:
+			return &model.Actor{ID: otherAgent, Kind: model.ActorKindAgent, OwnerActorID: "00000000-0000-4000-8000-0000000000a2"}, nil
+		case "00000000-0000-4000-8000-0000000000a2":
+			return &model.Actor{ID: id, Kind: model.ActorKindPerson, UserUID: "u2"}, nil
+		}
+		return nil, domainerrors.NotFoundError("actor not found", nil)
+	}
+	if err := move(actors, model.Author{UserID: owner, AgentID: agentID}); err != nil {
+		t.Errorf("own agent: %v", err)
+	}
+	for name, who := range map[string]model.Author{
+		"someone else's agent": {UserID: owner, AgentID: otherAgent},
+		"unknown agent":        {UserID: owner, AgentID: "00000000-0000-4000-8000-0000000000ff"},
+		"a person as agent":    {UserID: owner, AgentID: personID},
+	} {
+		if err := move(actors, who); !domainerrors.IsUnauthorized(err) {
+			t.Errorf("%s: want unauthorized, got %v", name, err)
+		}
 	}
 }
 
@@ -233,6 +292,7 @@ func TestIssueService_ImportIssue(t *testing.T) {
 		"no title":  {ProjectID: validID, SourceKey: "k", Number: 1, State: model.IssueStateTodo},
 		"no state":  {ProjectID: validID, SourceKey: "k", Number: 1, Title: "x"},
 		"bad label": {ProjectID: validID, SourceKey: "k", Number: 1, Title: "x", State: model.IssueStateTodo, LabelNames: []string{" "}},
+		"future":    {ProjectID: validID, SourceKey: "k", Number: 1, Title: "x", State: model.IssueStateTodo, CreatedAt: time.Now().Add(72 * time.Hour)},
 	} {
 		if _, _, err := svc.ImportIssue(ctx, as(owner), in); !domainerrors.IsValidation(err) {
 			t.Errorf("%s: want validation, got %v", name, err)

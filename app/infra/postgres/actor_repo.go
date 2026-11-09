@@ -88,10 +88,22 @@ func (r *ActorRepository) ListAgents(ctx context.Context, ownerID string, includ
 	return out, nil
 }
 
-// CreateAgent inserta el agente.
+// CreateAgent inserta el agente solo si su dueño es una persona sin
+// revocar, en la misma sentencia y con FOR SHARE sobre el dueño: un Revoke
+// concurrente (FOR UPDATE) espera, o lo hace fallar si ganó (entonces
+// FailedPrecondition ACTOR_REVOKED). Así no queda un agente sin revocar de
+// una persona revocada.
 func (r *ActorRepository) CreateAgent(ctx context.Context, agent *model.Actor) (*model.Actor, error) {
 	row := toActorRow(agent)
-	if err := r.db.WithContext(ctx).Create(row).Error; err != nil {
+	res := r.db.WithContext(ctx).Exec(
+		`INSERT INTO issues.actors (id, kind, owner_actor_id, tool, display_name, created_at)
+		 SELECT ?, 'agent', ?, ?, ?, ?
+		  WHERE EXISTS (SELECT 1 FROM issues.actors o
+		                 WHERE o.id = ? AND o.kind = 'person' AND o.revoked_at IS NULL
+		                   FOR SHARE)`,
+		row.ID, row.OwnerActorID, row.Tool, row.DisplayName, row.CreatedAt, row.OwnerActorID,
+	)
+	if err := res.Error; err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation && pgErr.ConstraintName == agentNameIndex {
 			return nil, domainerrors.ConflictError("agent name already exists", map[string]any{"display_name": agent.DisplayName}).
@@ -99,14 +111,17 @@ func (r *ActorRepository) CreateAgent(ctx context.Context, agent *model.Actor) (
 		}
 		return nil, translateError(err, "agent", "create", map[string]any{"display_name": agent.DisplayName})
 	}
+	if res.RowsAffected == 0 {
+		return nil, domainerrors.FailedPreconditionError("owner is revoked", map[string]any{"actor_id": agent.OwnerActorID}).
+			WithReason("ACTOR_REVOKED")
+	}
 	return fromActorRow(row), nil
 }
 
 // Revoke revoca el actor y, si es una persona, a sus agentes no revocados,
-// en una transacción, con la fila del actor tomada con FOR UPDATE. Un
-// CreateAgent que leyó a la persona antes de revocarla puede dejar un agente
-// sin revocar, pero sus tokens no valen: Resolve mira también al dueño, y
-// CreateToken rechaza a una persona revocada.
+// en una transacción, con la fila del actor tomada con FOR UPDATE (ver
+// CreateAgent). Además Resolve mira también al dueño, y CreateToken rechaza a
+// una persona revocada.
 func (r *ActorRepository) Revoke(ctx context.Context, id string, at time.Time) (*model.Actor, error) {
 	details := map[string]any{"id": id}
 	var out *model.Actor
