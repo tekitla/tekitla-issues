@@ -16,6 +16,7 @@
 //	go run ./tools/import-round -dry-run            # sin servidor: solo lee y reporta
 //	go run ./tools/import-round -formato template-docs -dir <repo de docs> -user <uid> [-project TK]
 //	go run ./tools/import-round -historico -dry-run [-detalle]   # histórico de Round desde git (issue 036)
+//	go run ./tools/import-round -historico -user <uid> [-addr localhost:5000] [-sobrescribir]   # lo carga (ImportIssueEvents)
 //
 // Habla gRPC sin TLS con el servicio (local, o por un túnel). Correrlo
 // contra QA o prod lo decide una persona: no hay valores por defecto que
@@ -67,8 +68,9 @@ type options struct {
 	dryRun        bool
 	skipGitCheck  bool
 	// history: reconstruir el histórico de estados desde git (issue 036).
-	history bool
-	detail  bool
+	history   bool
+	detail    bool
+	overwrite bool
 
 	// client reemplaza la conexión gRPC (tests).
 	client issuesv1.IssueServiceClient
@@ -85,8 +87,9 @@ func main() {
 	flag.BoolVar(&o.createProject, "create-project", false, "crear el proyecto si no existe")
 	flag.BoolVar(&o.dryRun, "dry-run", false, "solo leer y reportar, sin llamar al servicio")
 	flag.BoolVar(&o.skipGitCheck, "skip-git-check", false, "no verificar que la copia esté en main y al día")
-	flag.BoolVar(&o.history, "historico", false, "round: reconstruir el histórico de estados desde git (issue 036; por ahora solo con -dry-run)")
+	flag.BoolVar(&o.history, "historico", false, "round: reconstruir el histórico de estados desde git y cargarlo (issue 036)")
 	flag.BoolVar(&o.detail, "detalle", false, "con -historico: listar cada evento")
+	flag.BoolVar(&o.overwrite, "sobrescribir", false, "con -historico: reescribir los eventos ya cargados (para corregir una carga equivocada)")
 	flag.Parse()
 
 	if err := run(context.Background(), o, os.Stdout); err != nil {
@@ -181,8 +184,11 @@ func run(ctx context.Context, o options, out io.Writer) error {
 	if o.history && src.format != formatRound {
 		return errors.New("-historico es solo para -formato round")
 	}
-	if o.history && !o.dryRun {
-		return errHistoryNeedsContract
+	if o.history && !o.dryRun && o.user == "" {
+		return errors.New("falta -user (uid de quien importa)")
+	}
+	if o.overwrite && !o.history {
+		return errors.New("-sobrescribir es solo con -historico")
 	}
 	if o.detail && !o.history {
 		return errors.New("-detalle es solo con -historico")
@@ -199,7 +205,7 @@ func run(ctx context.Context, o options, out io.Writer) error {
 		}
 	}
 	if o.history {
-		return runHistory(o, src, out)
+		return runHistory(ctx, o, src, out)
 	}
 	docs, broken, err := src.read()
 	if err != nil {
@@ -224,16 +230,11 @@ func run(ctx context.Context, o options, out io.Writer) error {
 		return errors.New("falta -user (uid de quien importa)")
 	}
 
-	client := o.client
-	if client == nil {
-		conn, err := grpc.NewClient(o.addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-		if err != nil {
-			return fmt.Errorf("conectar a %s: %w", o.addr, err)
-		}
-		defer conn.Close()
-		client = issuesv1.NewIssueServiceClient(conn)
+	ctx, client, closeConn, err := connect(ctx, o)
+	if err != nil {
+		return err
 	}
-	ctx = metadata.AppendToOutgoingContext(ctx, "x-user-id", o.user, "x-request-id", "import-round-"+time.Now().UTC().Format("20060102T150405Z"))
+	defer closeConn()
 
 	project, err := findProject(ctx, client, src, o.createProject)
 	if err != nil {
@@ -364,22 +365,48 @@ func findProject(ctx context.Context, client issuesv1.IssueServiceClient, src *s
 	return res.GetProject(), nil
 }
 
-func existingIssues(ctx context.Context, client issuesv1.IssueServiceClient, projectID string) (Existing, error) {
-	existing := Existing{}
+// connect abre el cliente gRPC (o usa o.client en los tests) y agrega a ctx
+// la identidad de quien importa. closeConn cierra la conexión.
+func connect(ctx context.Context, o options) (context.Context, issuesv1.IssueServiceClient, func(), error) {
+	client, closeConn := o.client, func() {}
+	if client == nil {
+		conn, err := grpc.NewClient(o.addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("conectar a %s: %w", o.addr, err)
+		}
+		client, closeConn = issuesv1.NewIssueServiceClient(conn), func() { conn.Close() }
+	}
+	ctx = metadata.AppendToOutgoingContext(ctx, "x-user-id", o.user, "x-request-id", "import-round-"+time.Now().UTC().Format("20060102T150405Z"))
+	return ctx, client, closeConn, nil
+}
+
+// listIssues trae todos los issues del proyecto.
+func listIssues(ctx context.Context, client issuesv1.IssueServiceClient, projectID string) ([]*issuesv1.Issue, error) {
+	var out []*issuesv1.Issue
 	cursor := ""
 	for {
 		res, err := client.ListIssues(ctx, &issuesv1.ListIssuesRequest{ProjectId: projectID, Page: &issuesv1.PageRequest{Cursor: cursor, Limit: 100}})
 		if err != nil {
 			return nil, fmt.Errorf("ListIssues: %w", err)
 		}
-		for _, it := range res.GetIssues() {
-			existing[it.GetNumber()] = it.GetSourceKey()
-		}
+		out = append(out, res.GetIssues()...)
 		if !res.GetPage().GetHasNext() {
-			return existing, nil
+			return out, nil
 		}
 		cursor = res.GetPage().GetNextCursor()
 	}
+}
+
+func existingIssues(ctx context.Context, client issuesv1.IssueServiceClient, projectID string) (Existing, error) {
+	issues, err := listIssues(ctx, client, projectID)
+	if err != nil {
+		return nil, err
+	}
+	existing := Existing{}
+	for _, it := range issues {
+		existing[it.GetNumber()] = it.GetSourceKey()
+	}
+	return existing, nil
 }
 
 // Failure es un archivo que no se pudo leer o importar.

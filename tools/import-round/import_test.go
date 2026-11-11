@@ -110,13 +110,21 @@ func TestMapState(t *testing.T) {
 		"`won't-do`":                                 issuesv1.IssueState_ISSUE_STATE_CANCELED,
 		"Superseded":                                 issuesv1.IssueState_ISSUE_STATE_CANCELED,
 		"`open` | `in-progress` | `resolved`":        issuesv1.IssueState_ISSUE_STATE_TODO,
+		// Decididos por Victor el 2026-11-11 (issue 036).
+		"abierto":   issuesv1.IssueState_ISSUE_STATE_TODO,
+		"`abierto`": issuesv1.IssueState_ISSUE_STATE_TODO,
+		"`in-review` — school-service ya devuelve el perfil (MR en borrador)": issuesv1.IssueState_ISSUE_STATE_IN_PROGRESS,
+		"`front arreglado` · falta el fix de fondo":                           issuesv1.IssueState_ISSUE_STATE_IN_PROGRESS,
+		"`resuelto (pendiente de deploy a QA)`":                               issuesv1.IssueState_ISSUE_STATE_DONE,
+		"`resuelto en código` — mergeado, falta confirmar el despliegue":      issuesv1.IssueState_ISSUE_STATE_DONE,
+		"✅ `resuelto y verificado en producción` (2026-08-27)":                issuesv1.IssueState_ISSUE_STATE_DONE,
 	}
 	for raw, want := range cases {
 		if got, ok := MapState(raw); !ok || got != want {
 			t.Errorf("MapState(%q) = %v %v, want %v", raw, got, ok, want)
 		}
 	}
-	for _, raw := range []string{"", "   ", "`archivado`", "en revisión"} {
+	for _, raw := range []string{"", "   ", "`archivado`", "en revisión", "propuesta, sin implementar", "✅"} {
 		if got, ok := MapState(raw); ok || got != issuesv1.IssueState_ISSUE_STATE_TODO {
 			t.Errorf("MapState(%q) = %v %v, want TODO unknown", raw, got, ok)
 		}

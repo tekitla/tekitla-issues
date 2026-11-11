@@ -4,7 +4,7 @@
 # =============================================================================
 # Aplica migrations/*.up.sql en orden y, antes de cada migración con backfill,
 # carga datos de la versión anterior para verificar que el backfill los deja
-# bien. Al final prueba down -> up de la última. No toca ninguna base real:
+# bien. Al final prueba down -> up de cada una que lo pide (hoy 000005 y 000006). No toca ninguna base real:
 # levanta un contenedor propio y lo borra al terminar.
 #
 #   scripts/test_migrations.sh        (o `make test-migrations`)
@@ -200,6 +200,45 @@ check "down: las etiquetas importadas quedan como comunes" "2" "SELECT count(*) 
 apply 000005_actors_tokens_assignee_import.up
 check "up de nuevo: issues sin asignar y etiquetas a mano" "0|0" "SELECT (SELECT count(*) FROM issues.issues WHERE assignee_actor_id IS NOT NULL),
   (SELECT count(*) FROM issues.issue_labels WHERE imported)"
+
+EVENTS_BEFORE_6="$(sql "SELECT count(*) FROM issues.issue_events" | tr -d '\r')"
+apply 000006_event_source.up
+
+echo "== 000006: los eventos existentes no cambian de significado (NULL = LIVE)"
+check "eventos sin fuente ni referencia" "$EVENTS_BEFORE_6|0|0" "SELECT count(*), count(source), count(source_ref) FROM issues.issue_events"
+check "sin DEFAULT en source y source_ref" "0" "SELECT count(*) FROM information_schema.columns
+  WHERE table_schema = 'issues' AND table_name = 'issue_events' AND column_name IN ('source', 'source_ref') AND column_default IS NOT NULL"
+check "índice viejo reemplazado" "0|1" "SELECT count(*) FILTER (WHERE indexname = 'issue_events_issue_id_seq_idx'),
+  count(*) FILTER (WHERE indexname = 'issue_events_issue_id_created_at_seq_idx') FROM pg_indexes WHERE schemaname = 'issues'"
+
+echo "== restricciones de 000006"
+ISSUE1="(SELECT id FROM issues.issues WHERE number = 1 AND project_id = '$TK')"
+ISSUE2="(SELECT id FROM issues.issues WHERE number = 2 AND project_id = '$TK')"
+ins() { echo "INSERT INTO issues.issue_events (id, issue_id, actor_uid, kind, data, source, source_ref)
+  SELECT gen_random_uuid(), id, 'u1', 'status_changed', '{}'::jsonb, $2 FROM issues.issues WHERE id = $1"; }
+must_fail "fuente desconocida" "$(ins "$ISSUE1" "'manual', NULL")"
+must_fail "importado sin referencia" "$(ins "$ISSUE1" "'import_history', NULL")"
+must_fail "en vivo con referencia" "$(ins "$ISSUE1" "'live', 'abc'")"
+must_fail "sin fuente con referencia" "$(ins "$ISSUE1" "NULL, 'abc'")"
+must_fail "sync con referencia" "$(ins "$ISSUE1" "'import_sync', 'abc'")"
+must_fail "referencia vacía" "$(ins "$ISSUE1" "'import_file', ''")"
+must_fail "referencia de más de 200" "$(ins "$ISSUE1" "'import_file', repeat('r', 201)")"
+sql "$(ins "$ISSUE1" "'import_history', 'abc'")"
+sql "$(ins "$ISSUE1" "'live', NULL")"
+sql "$(ins "$ISSUE1" "'import_sync', NULL")"
+echo "ok   import_history con referencia, live y import_sync sin referencia"
+must_fail "referencia repetida en el issue" "$(ins "$ISSUE1" "'import_file', 'abc'")"
+sql "$(ins "$ISSUE2" "'import_history', 'abc'")"
+echo "ok   la misma referencia en otro issue"
+
+apply 000006_event_source.down
+check "down: sin columnas nuevas" "0" "SELECT count(*) FROM information_schema.columns
+  WHERE table_schema = 'issues' AND table_name = 'issue_events' AND column_name IN ('source', 'source_ref')"
+check "down: los eventos importados se conservan" "$((EVENTS_BEFORE_6 + 4))" "SELECT count(*) FROM issues.issue_events"
+check "down: vuelve el índice de 000003" "1" "SELECT count(*) FROM pg_indexes WHERE schemaname = 'issues' AND indexname = 'issue_events_issue_id_seq_idx'"
+
+apply 000006_event_source.up
+check "up de nuevo: todo sin fuente" "0" "SELECT count(source) FROM issues.issue_events"
 
 if [ "$fails" -ne 0 ]; then echo "Migraciones: con fallas"; exit 1; fi
 echo "Migraciones: todo ok"

@@ -40,6 +40,8 @@ type eventRow struct {
 	Kind             string
 	Data             []byte
 	CreatedAt        time.Time
+	Source           *string
+	SourceRef        *string
 	CommentID        *string
 	CommentAuthorUID *string
 	CommentBody      *string
@@ -91,13 +93,16 @@ type assigneeChangeData struct {
 	ToDisplayName   string `json:"to_display_name"`
 }
 
-// eventCursor: orden (seq ASC); seq es único.
+// eventCursor: orden (created_at ASC, seq ASC); seq es único. T es
+// created_at en microsegundos desde 1970 (la precisión de la base). Un
+// cursor sin T (de antes de v0.6.0) es inválido.
 type eventCursor struct {
+	T   int64 `json:"t"`
 	Seq int64 `json:"s"`
 }
 
-// insertEvent guarda un evento del issue. El comentario, si lo hay, ya tiene
-// que estar insertado.
+// insertEvent guarda un evento del issue, con su fuente (sin fuente: LIVE).
+// El comentario, si lo hay, ya tiene que estar insertado.
 func insertEvent(tx *gorm.DB, issueID string, author model.Author, ev *model.IssueEvent, at time.Time) error {
 	data, err := eventData(ev)
 	if err != nil {
@@ -107,10 +112,15 @@ func insertEvent(tx *gorm.DB, issueID string, author model.Author, ev *model.Iss
 	if ev.Comment != nil {
 		commentID = &ev.Comment.ID
 	}
+	var sourceRef *string
+	if ev.SourceRef != "" {
+		sourceRef = &ev.SourceRef
+	}
 	return tx.Exec(
-		`INSERT INTO issues.issue_events (id, issue_id, actor_uid, agent_id, kind, data, comment_id, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?::jsonb, ?, ?)`,
+		`INSERT INTO issues.issue_events (id, issue_id, actor_uid, agent_id, kind, data, comment_id, created_at, source, source_ref)
+		 VALUES (?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?)`,
 		uuid.NewString(), issueID, author.UserID, agentIDOrNil(author), string(ev.Kind), string(data), commentID, at,
+		string(ev.Source.OrLive()), sourceRef,
 	).Error
 }
 
@@ -173,9 +183,16 @@ func fromEventRow(r *eventRow) (*model.IssueEvent, error) {
 		ActorUID:  r.ActorUID,
 		Kind:      model.EventKind(r.Kind),
 		CreatedAt: r.CreatedAt,
+		Source:    model.EventSourceLive,
 	}
 	if r.AgentID != nil {
 		ev.AgentID = *r.AgentID
+	}
+	if r.Source != nil {
+		ev.Source = model.EventSource(*r.Source)
+	}
+	if r.SourceRef != nil {
+		ev.SourceRef = *r.SourceRef
 	}
 	var err error
 	switch ev.Kind {
@@ -551,7 +568,8 @@ func (r *IssueRepository) AddComment(ctx context.Context, projectID string, numb
 	return comment, nil
 }
 
-// ListEvents pagina el historial del issue por seq ASC.
+// ListEvents pagina el historial del issue por (created_at, seq) ASC: un
+// evento importado aparece en su fecha del origen.
 func (r *IssueRepository) ListEvents(ctx context.Context, projectID string, number int32, page port.PageFilter) (*port.EventPage, error) {
 	details := map[string]any{"project_id": projectID, "number": number}
 	db := r.db.WithContext(ctx)
@@ -562,25 +580,27 @@ func (r *IssueRepository) ListEvents(ctx context.Context, projectID string, numb
 	if len(ids) == 0 {
 		return nil, domainerrors.NotFoundError("issue not found", details)
 	}
-	after := int64(0)
+	// Sin cursor: desde antes de cualquier evento.
+	afterT, afterSeq := time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC), int64(0)
 	if page.Cursor != "" {
 		var c eventCursor
-		if err := decodeCursor(page.Cursor, &c); err != nil || c.Seq <= 0 {
+		if err := decodeCursor(page.Cursor, &c); err != nil || c.Seq <= 0 || c.T == 0 {
 			return nil, domainerrors.ValidationError("invalid cursor", map[string]any{"field": "cursor"})
 		}
-		after = c.Seq
+		afterT, afterSeq = time.UnixMicro(c.T).UTC(), c.Seq
 	}
 	limit := int(page.Limit)
 	var rows []eventRow
 	err := db.Raw(
 		`SELECT e.id, e.seq, e.issue_id, e.actor_uid, e.agent_id, e.kind, e.data, e.created_at,
+		        e.source, e.source_ref,
 		        c.id AS comment_id, c.author_uid AS comment_author_uid, c.body AS comment_body,
 		        c.created_at AS comment_created_at
 		   FROM issues.issue_events e
 		   LEFT JOIN issues.comments c ON c.id = e.comment_id
-		  WHERE e.issue_id = ? AND e.seq > ?
-		  ORDER BY e.seq ASC
-		  LIMIT ?`, ids[0], after, limit+1,
+		  WHERE e.issue_id = ? AND (e.created_at, e.seq) > (?, ?)
+		  ORDER BY e.created_at ASC, e.seq ASC
+		  LIMIT ?`, ids[0], afterT, afterSeq, limit+1,
 	).Scan(&rows).Error
 	if err != nil {
 		return nil, translateError(err, "issue events", "list", details)
@@ -598,7 +618,8 @@ func (r *IssueRepository) ListEvents(ctx context.Context, projectID string, numb
 		out.Events[i] = ev
 	}
 	if hasNext && len(rows) > 0 {
-		out.NextCursor = encodeCursor(eventCursor{Seq: rows[len(rows)-1].Seq})
+		last := rows[len(rows)-1]
+		out.NextCursor = encodeCursor(eventCursor{T: last.CreatedAt.UnixMicro(), Seq: last.Seq})
 	}
 	return out, nil
 }

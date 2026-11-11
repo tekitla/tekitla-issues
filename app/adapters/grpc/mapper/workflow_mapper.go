@@ -129,6 +129,8 @@ func IssueEventToProto(m *model.IssueEvent) (*issuesv1.IssueEvent, error) {
 		ActorId:   m.ActorUID,
 		AgentId:   m.AgentID,
 		CreatedAt: TimestampToProto(m.CreatedAt),
+		Source:    EventSourceToProto(m.Source),
+		SourceRef: m.SourceRef,
 	}
 	switch m.Kind {
 	case model.EventCreated:
@@ -196,4 +198,52 @@ func IssueEventsToProto(events []*model.IssueEvent) ([]*issuesv1.IssueEvent, err
 		out[i] = ev
 	}
 	return out, nil
+}
+
+// EventSourceToProto convierte la fuente de un evento (issue 036). Sin
+// fuente (eventos anteriores) es LIVE.
+func EventSourceToProto(s model.EventSource) issuesv1.EventSource {
+	switch s.OrLive() {
+	case model.EventSourceImportHistory:
+		return issuesv1.EventSource_EVENT_SOURCE_IMPORT_HISTORY
+	case model.EventSourceImportFile:
+		return issuesv1.EventSource_EVENT_SOURCE_IMPORT_FILE
+	case model.EventSourceImportSync:
+		return issuesv1.EventSource_EVENT_SOURCE_IMPORT_SYNC
+	}
+	return issuesv1.EventSource_EVENT_SOURCE_LIVE
+}
+
+// EventSourceFromProto convierte la fuente de un ImportedEvent. Un valor que
+// no es de importación queda como un valor inválido que rechaza la
+// validación del dominio.
+func EventSourceFromProto(s issuesv1.EventSource) model.EventSource {
+	switch s {
+	case issuesv1.EventSource_EVENT_SOURCE_IMPORT_HISTORY:
+		return model.EventSourceImportHistory
+	case issuesv1.EventSource_EVENT_SOURCE_IMPORT_FILE:
+		return model.EventSourceImportFile
+	case issuesv1.EventSource_EVENT_SOURCE_LIVE:
+		return model.EventSourceLive
+	case issuesv1.EventSource_EVENT_SOURCE_IMPORT_SYNC:
+		return model.EventSourceImportSync
+	}
+	return model.EventSource(fmt.Sprintf("unknown(%d)", int32(s)))
+}
+
+// ImportedEventFromProto convierte un evento de ImportIssueEvents. Sin
+// change, Status queda nil (lo rechaza la validación). Una fecha inválida
+// queda en cero (también la rechaza).
+func ImportedEventFromProto(e *issuesv1.ImportedEvent) model.ImportedEvent {
+	out := model.ImportedEvent{SourceRef: e.GetSourceRef(), Source: EventSourceFromProto(e.GetSource())}
+	if e.GetOccurredAt().IsValid() {
+		out.OccurredAt = e.GetOccurredAt().AsTime()
+	}
+	if c := e.GetStatusChanged(); c != nil {
+		out.Status = &model.StatusChange{
+			FromName: c.GetFromName(), FromCategory: IssueStateFromProto(c.GetFromState()),
+			ToName: c.GetToName(), ToCategory: IssueStateFromProto(c.GetToState()),
+		}
+	}
+	return out
 }

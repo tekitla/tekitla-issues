@@ -311,8 +311,11 @@ func TestRunHistory(t *testing.T) {
 	}
 
 	o.dryRun = false
-	if err := run(context.Background(), o, &out); err != errHistoryNeedsContract {
-		t.Errorf("sin -dry-run: %v", err)
+	if err := run(context.Background(), o, &out); err == nil || !strings.Contains(err.Error(), "-user") {
+		t.Errorf("sin -dry-run ni -user: %v", err)
+	}
+	if err := run(context.Background(), options{dir: r.issues(), dryRun: true, skipGitCheck: true, overwrite: true}, &out); err == nil {
+		t.Error("-sobrescribir sin -historico debería fallar")
 	}
 	if err := run(context.Background(), options{dir: r.issues(), dryRun: true, skipGitCheck: true, detail: true}, &out); err == nil {
 		t.Error("-detalle sin -historico debería fallar")
@@ -438,9 +441,9 @@ func TestUnquotePath(t *testing.T) {
 func TestHistory_UnknownOncePerValue(t *testing.T) {
 	r := newTestRepo(t)
 	const f = "050-vuelve.md"
-	r.commit("2026-06-18T10:00:00Z", map[string]string{f: issueMD("Vuelve", "`abierto`", "2026-06-18", "", "x")})
+	r.commit("2026-06-18T10:00:00Z", map[string]string{f: issueMD("Vuelve", "`en-pausa`", "2026-06-18", "", "x")})
 	r.commit("2026-06-19T10:00:00Z", map[string]string{f: issueMD("Vuelve", "`in-progress`", "2026-06-18", "", "x")})
-	r.commit("2026-06-20T10:00:00Z", map[string]string{f: issueMD("Vuelve", "`abierto`", "2026-06-18", "", "x")})
+	r.commit("2026-06-20T10:00:00Z", map[string]string{f: issueMD("Vuelve", "`en-pausa`", "2026-06-18", "", "x")})
 	if h := r.history(f); len(h.Unknown) != 1 || len(h.Events) != 3 {
 		t.Errorf("unknown %+v, events %d", h.Unknown, len(h.Events))
 	}

@@ -28,10 +28,7 @@ set -euo pipefail
 #       ssh -N -L 15432:<IP-del-contenedor>:5432 usuario@vps
 #       DATABASE_URL=postgres://USER:PASS@localhost:15432/DB?sslmode=disable
 #
-# psql: usa el local si existe; si no, la imagen $PG_IMAGE con Docker. En modo
-# Docker, localhost/127.0.0.1 de la URL se reescribe a host.docker.internal
-# (el contenedor no ve el localhost de la máquina). PG_DOCKER_NETWORK=<red>
-# conecta el contenedor a una red de Docker y no reescribe nada.
+# psql: local o en Docker (scripts/psql_env.sh).
 #
 # Uso:
 #   DATABASE_URL=... ./scripts/apply_migration.sh qa   000001_create_issues_schema
@@ -45,7 +42,6 @@ set -euo pipefail
 #   PG_DOCKER_NETWORK  red de Docker a la que conectar el contenedor
 # =============================================================================
 
-PG_IMAGE="${PG_IMAGE:-postgres:18}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
@@ -69,12 +65,8 @@ case "$FLAG" in
   *) echo "Flag desconocido: $FLAG" >&2; usage ;;
 esac
 
-[[ -n "${DATABASE_URL:-}" ]] || { echo "Falta DATABASE_URL (variable de entorno)" >&2; exit 1; }
-
-# Nombre de la base: lo que sigue a la última "/" sin la query string.
-DATABASE="${DATABASE_URL%%\?*}"
-DATABASE="${DATABASE##*/}"
-[[ -n "$DATABASE" ]] || { echo "DATABASE_URL no trae nombre de base" >&2; exit 1; }
+# shellcheck source=psql_env.sh
+source "$SCRIPT_DIR/psql_env.sh"
 
 # Acepta el nombre a secas, con .up.sql o con la ruta completa.
 name="$(basename "$MIGRATION")"
@@ -91,26 +83,6 @@ if grep -qiE '^[[:space:]]*(BEGIN|COMMIT|ROLLBACK)[[:space:]]*;' "$SQL_FILE"; th
   exit 1
 fi
 
-# --- psql local o en Docker ---------------------------------------------------
-if command -v psql >/dev/null 2>&1 && [[ "${PG_USE_DOCKER:-}" != "1" ]]; then
-  run_psql() { psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -X -q "$@"; }
-else
-  command -v docker >/dev/null 2>&1 || { echo "No hay psql local ni docker" >&2; exit 1; }
-  DOCKER_ARGS=(--rm -i)
-  if [[ -n "${PG_DOCKER_NETWORK:-}" ]]; then
-    DOCKER_ARGS+=(--network "$PG_DOCKER_NETWORK")
-    PG_URL="$DATABASE_URL"
-  else
-    DOCKER_ARGS+=(--add-host=host.docker.internal:host-gateway)
-    PG_URL="$(printf '%s' "$DATABASE_URL" | sed -E 's#@(localhost|127\.0\.0\.1)([:/])#@host.docker.internal\2#')"
-  fi
-  # La URL viaja por variable de entorno (no queda en `ps` del host).
-  run_psql() {
-    PG_URL="$PG_URL" docker run "${DOCKER_ARGS[@]}" -e PG_URL "$PG_IMAGE" \
-      sh -c 'exec psql "$PG_URL" -v ON_ERROR_STOP=1 -X -q "$@"' psql "$@"
-  }
-fi
-
 echo "> $name -> $DATABASE ($ENVIRONMENT)"
 
 echo "1/2 Prueba en seco (BEGIN ... ROLLBACK)"
@@ -123,15 +95,7 @@ if [[ $APPLY -ne 1 ]]; then
 fi
 
 if [[ "$ENVIRONMENT" == "prod" ]]; then
-  echo
-  echo "Vas a aplicar $name en PROD ($DATABASE)."
-  # Sin terminal el read recibe EOF: avisar en vez de cortar en silencio.
-  if ! read -r -p "Escribí '$DATABASE' para confirmar: " answer; then
-    echo >&2
-    echo "No hay terminal para confirmar: no se aplicó nada." >&2
-    exit 1
-  fi
-  [[ "$answer" == "$DATABASE" ]] || { echo "Cancelado." >&2; exit 1; }
+  confirm_prod "$name"
 fi
 
 echo "2/2 Aplicando"
