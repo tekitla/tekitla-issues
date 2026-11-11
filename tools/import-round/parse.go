@@ -29,8 +29,20 @@ type Doc struct {
 	RawPriority string
 	RawArea     string
 	RawDate     string
-	// Body es el markdown sin la línea del título.
+	// Body es el markdown sin la línea del título (ni el frontmatter).
 	Body string
+
+	// Solo template-docs (templatedocs.go).
+	// Dir es la carpeta del issue, p. ej. "030-mcp-de-lectura".
+	Dir string
+	// RawLabels son tipo, area y repos tal como vienen.
+	RawLabels []string
+	// RawResolved es el campo resuelto ("" si es null o falta).
+	RawResolved string
+	// HasPlan: la carpeta tiene plan.md.
+	HasPlan bool
+	// FolderNumber es el número del nombre de la carpeta, si difiere del id.
+	FolderNumber int32
 }
 
 // fileName: número + slug. Los demás .md (README, _template) no son issues.
@@ -231,8 +243,14 @@ const DescriptionMaxLen = 20000
 // archivo de origen. Si no entra, recorta el cuerpo y lo avisa en el texto
 // (truncated = true).
 func Description(doc *Doc, sourceURL string) (desc string, truncated bool) {
-	footer := fmt.Sprintf("\n\n---\n\nImportado de Round: [`Issues/%s`](%s) (rama `main` de `documentacion`).", doc.File, sourceURL)
-	body := doc.Body
+	footer := fmt.Sprintf("Importado de Round: [`Issues/%s`](%s) (rama `main` de `documentacion`).", doc.File, sourceURL)
+	return describe(doc.Body, footer)
+}
+
+// describe junta el cuerpo y el pie (separados por una línea) dentro de
+// DescriptionMaxLen: si no entra, recorta el cuerpo y lo avisa en el texto.
+func describe(body, footer string) (desc string, truncated bool) {
+	footer = "\n\n---\n\n" + footer
 	if utf8.RuneCountInString(body)+utf8.RuneCountInString(footer) <= DescriptionMaxLen {
 		return body + footer, false
 	}
