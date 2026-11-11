@@ -108,7 +108,8 @@ type ImportEventsResult struct {
 // ImportEventsMax, source_ref de 1 a SourceRefMaxLen runas y sin repetir,
 // fuente IMPORT_HISTORY o IMPORT_FILE, fecha presente y no en el futuro
 // (now, con un día de margen por las fechas sin hora), cambio de estado con
-// categorías válidas y nombres de 1 a StatusNameMaxLen. Que no sea anterior
+// categorías válidas, nombres de 1 a StatusNameMaxLen y algún cambio (mismo
+// nombre y categoría no es un cambio de estado). Que no sea anterior
 // al alta del issue lo verifica quien lo guarda.
 func NormalizeImportedEvents(events []ImportedEvent, now time.Time) ([]ImportedEvent, error) {
 	if len(events) == 0 || len(events) > ImportEventsMax {
@@ -148,6 +149,9 @@ func NormalizeImportedEvents(events []ImportedEvent, now time.Time) ([]ImportedE
 		to, err := requiredText(field("status_changed.to_name"), ev.Status.ToName, StatusNameMaxLen)
 		if err != nil {
 			return nil, err
+		}
+		if from == to && ev.Status.FromCategory == ev.Status.ToCategory {
+			return nil, domainerrors.ValidationError("status change changes nothing", map[string]any{"field": field("status_changed")})
 		}
 		out[i] = ImportedEvent{
 			SourceRef: ref, Source: ev.Source, OccurredAt: ev.OccurredAt,

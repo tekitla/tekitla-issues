@@ -12,9 +12,18 @@ set -euo pipefail
 # en vivo: las métricas de flujo los contarían junto al histórico importado.
 # Este script les pone source = 'import_sync'.
 #
-# Alcance: TODOS los eventos sin fuente de los issues del proyecto <clave>
-# del espacio de <uid>. Los que ya tienen fuente (registrados desde v0.6.0,
-# o importados con ImportIssueEvents) no se tocan. Requiere 000006.
+# Alcance: los eventos sin fuente de los issues importados (con clave de
+# origen) del proyecto <clave> del espacio de <uid>, de los tipos que
+# escribe ImportIssue (created, status_changed, title_changed,
+# description_changed, priority_changed, labels_changed). Comentarios,
+# asignados, descartes y restauraciones nunca los escribe ImportIssue: no se
+# tocan, y la prueba en seco los muestra aparte. Los eventos que ya tienen
+# fuente (desde v0.6.0, o de ImportIssueEvents) tampoco. Requiere 000006.
+#
+# Además alinea la fecha del evento «creado» de esos issues importados con
+# su created_at: en v0.5 quedaba con la fecha de la corrida, y desde v0.6.0
+# el contrato dice que es el alta (así el historial empieza por el
+# «creado»). Es la única fecha que cambia; la prueba en seco la cuenta.
 #
 # Sin --apply (en QA y en prod) solo muestra qué cambiaría: el proyecto y
 # cuántos eventos por tipo, dentro de BEGIN ... ROLLBACK. Con --apply lo
@@ -64,7 +73,9 @@ SELECT e.id, e.kind
   JOIN issues.issues i ON i.id = e.issue_id
   JOIN issues.projects p ON p.id = i.project_id
   JOIN issues.workspaces w ON w.id = p.workspace_id
- WHERE w.owner_uid = :'owner' AND p.key = upper(:'key') AND e.source IS NULL;
+ WHERE w.owner_uid = :'owner' AND p.key = upper(:'key') AND e.source IS NULL
+   AND i.source_key IS NOT NULL
+   AND e.kind IN ('created', 'status_changed', 'title_changed', 'description_changed', 'priority_changed', 'labels_changed');
 
 \\echo 'Proyecto (issues, issues importados):'
 SELECT p.key, p.name, count(i.id) AS issues, count(i.source_key) AS importados
@@ -77,8 +88,29 @@ SELECT p.key, p.name, count(i.id) AS issues, count(i.source_key) AS importados
 \\echo 'Eventos sin fuente que pasan a import_sync, por tipo:'
 SELECT kind, count(*) FROM backfill_target GROUP BY kind ORDER BY kind;
 
+\\echo 'Eventos sin fuente que NO se tocan (issues creados en Tekitla o tipos que ImportIssue no escribe):'
+SELECT CASE WHEN i.source_key IS NULL THEN 'creado en Tekitla' ELSE 'importado' END AS issue, e.kind, count(*)
+  FROM issues.issue_events e
+  JOIN issues.issues i ON i.id = e.issue_id
+  JOIN issues.projects p ON p.id = i.project_id
+  JOIN issues.workspaces w ON w.id = p.workspace_id
+ WHERE w.owner_uid = :'owner' AND p.key = upper(:'key') AND e.source IS NULL
+   AND e.id NOT IN (SELECT id FROM backfill_target)
+ GROUP BY 1, 2 ORDER BY 1, 2;
+
 UPDATE issues.issue_events SET source = 'import_sync' WHERE id IN (SELECT id FROM backfill_target);
 SELECT count(*) AS marcados FROM backfill_target;
+
+\\echo 'Evento «creado» de issues importados con la fecha de la corrida, que pasa al alta del issue (contrato v0.6.0):'
+WITH aligned AS (
+  UPDATE issues.issue_events e SET created_at = i.created_at
+    FROM issues.issues i
+    JOIN issues.projects p ON p.id = i.project_id
+    JOIN issues.workspaces w ON w.id = p.workspace_id
+   WHERE e.issue_id = i.id AND e.kind = 'created' AND e.created_at <> i.created_at
+     AND w.owner_uid = :'owner' AND p.key = upper(:'key') AND i.source_key IS NOT NULL
+  RETURNING e.id)
+SELECT count(*) AS altas_alineadas FROM aligned;
 "
 
 echo "> backfill import_sync: proyecto $KEY de $OWNER -> $DATABASE ($ENVIRONMENT)"

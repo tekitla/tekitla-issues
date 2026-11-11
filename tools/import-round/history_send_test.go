@@ -43,6 +43,12 @@ func (f *historyFake) ImportIssue(_ context.Context, req *issuesv1.ImportIssueRe
 	if it == nil || !req.GetOverrideCreatedAt() || req.GetProjectId() != "p1" || req.GetNumber() != it.GetNumber() {
 		return nil, status.Error(codes.FailedPrecondition, "solo corrección del alta")
 	}
+	// Como el servicio: el alta no puede quedar después de un evento importado.
+	for _, e := range f.events[req.GetSourceKey()] {
+		if e.GetOccurredAt().AsTime().Before(req.GetCreatedAt().AsTime()) {
+			return nil, status.Error(codes.FailedPrecondition, "IMPORT_EVENTS_BEFORE_CREATED")
+		}
+	}
 	f.overrides = append(f.overrides, req.GetSourceKey())
 	it.CreatedAt = req.GetCreatedAt()
 	return &issuesv1.ImportIssueResponse{Issue: it, Outcome: issuesv1.ImportOutcome_IMPORT_OUTCOME_UPDATED}, nil
@@ -62,6 +68,15 @@ func (f *historyFake) ImportIssueEvents(_ context.Context, req *issuesv1.ImportI
 		dup := false
 		for _, have := range f.events[req.GetSourceKey()] {
 			dup = dup || have.GetSourceRef() == e.GetSourceRef()
+		}
+		if dup && req.GetOverwrite() {
+			for i, have := range f.events[req.GetSourceKey()] {
+				if have.GetSourceRef() == e.GetSourceRef() {
+					f.events[req.GetSourceKey()][i] = e
+				}
+			}
+			res.Updated++
+			continue
 		}
 		if dup {
 			res.Skipped++
@@ -129,7 +144,45 @@ func TestRunHistory_Send(t *testing.T) {
 	if err := run(context.Background(), o, &out); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "Cargados: 0 · ya estaban: 2 · reescritos: 0 · altas corregidas: 0") || len(fake.overrides) != 1 || !fake.overwrite {
+	if !strings.Contains(out.String(), "Cargados: 0 · ya estaban: 0 · reescritos: 2 · altas corregidas: 0") || len(fake.overrides) != 1 || !fake.overwrite {
 		t.Errorf("segunda corrida:\n%s\noverrides %v overwrite %v", out.String(), fake.overrides, fake.overwrite)
+	}
+}
+
+// -sobrescribir corrige una carga anterior con eventos antes del alta
+// correcta: la corrección del alta falla, se reescriben los eventos y se
+// vuelve a intentar.
+func TestRunHistory_OverwriteFixesEarlierLoad(t *testing.T) {
+	r := newTestRepo(t)
+	r.commit("2026-06-18T10:00:00Z", map[string]string{"001-a.md": issueMD("A", "`open`", "2026-06-01", "", "x")})
+	c2 := r.commit("2026-07-01T10:00:00Z", map[string]string{"001-a.md": issueMD("A", "`in-progress`", "2026-06-01", "", "x")})
+	wrong := &issuesv1.ImportedEvent{SourceRef: c2, Source: issuesv1.EventSource_EVENT_SOURCE_IMPORT_HISTORY,
+		OccurredAt: timestamppb.New(time.Date(2026, 5, 15, 0, 0, 0, 0, time.UTC))}
+	fake := &historyFake{
+		issues: map[string]*issuesv1.Issue{
+			"001-a": {Number: 1, SourceKey: "001-a", CreatedAt: timestamppb.New(time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC))},
+		},
+		events: map[string][]*issuesv1.ImportedEvent{"001-a": {wrong}},
+	}
+	o := options{dir: r.issues(), history: true, user: "u1", skipGitCheck: true, client: fake}
+	var out strings.Builder
+	// Sin -sobrescribir: el alta no se puede corregir y va al reporte.
+	if err := run(context.Background(), o, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "con error: 1") || len(fake.overrides) != 0 {
+		t.Fatalf("sin -sobrescribir:\n%s", out.String())
+	}
+	out.Reset()
+	o.overwrite = true
+	if err := run(context.Background(), o, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "reescritos: 1 · altas corregidas: 1") || !strings.Contains(out.String(), "con error: 0") {
+		t.Errorf("con -sobrescribir:\n%s", out.String())
+	}
+	if got := fake.events["001-a"][0].GetOccurredAt().AsTime(); !got.Equal(time.Date(2026, 7, 1, 10, 0, 0, 0, time.UTC)) ||
+		!fake.issues["001-a"].GetCreatedAt().AsTime().Equal(time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf("evento %v, alta %v", got, fake.issues["001-a"].GetCreatedAt().AsTime())
 	}
 }

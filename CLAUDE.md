@@ -276,7 +276,8 @@ compose, ver `cli/healthcheck.go`) y reflection fuera de prod.
   `DEFAULT false`, que es lo que son todas las etiquetas existentes) y
   `000006` las del 036 (`source` y `source_ref` en `issue_events`, sin
   DEFAULT, e índice `(issue_id, created_at, seq)`). Marcar `import_sync` los
-  eventos viejos de un proyecto espejo es aparte y revisable:
+  eventos viejos de ImportIssue de un proyecto espejo (y alinear su
+  «creado» con el alta) es aparte y revisable:
   `scripts/backfill_import_sync.sh <qa|prod> <uid> <clave> [--apply]` (sin
   `--apply` solo muestra). El `docker-compose.yml` local las aplica
   solo al crear el volumen (`docker compose down -v` para empezar de cero).

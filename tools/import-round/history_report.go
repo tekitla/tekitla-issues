@@ -54,7 +54,11 @@ func runHistory(ctx context.Context, o options, src *source, out io.Writer) erro
 	}
 	defer blobs.Close() // por si algo corta antes; el Close de abajo manda
 	for _, d := range plan.Import {
-		rep.Histories = append(rep.Histories, BuildHistory(d, readStates(blobs, d, logs[d.File])))
+		h := BuildHistory(d, readStates(blobs, d, logs[d.File]))
+		if o.dryRun {
+			h.Doc.Body = "" // solo la carga lo usa (para corregir el alta)
+		}
+		rep.Histories = append(rep.Histories, h)
 	}
 	// Si cat-file murió o se desfasó, el histórico no es confiable: error,
 	// sin reporte ni carga.
@@ -228,7 +232,7 @@ func (e HistoryEvent) describe() string {
 	if e.Kind == KindCreated {
 		return fmt.Sprintf("%s  alta  (%s)", date, src)
 	}
-	return fmt.Sprintf("%s  %s → %s  [%s → %s]  (%s)", date, stateName(e.From), stateName(e.To), leadingToken(e.FromRaw), leadingToken(e.ToRaw), src)
+	return fmt.Sprintf("%s  %s → %s  [%s → %s]  (%s)", date, stateName(e.From), stateName(e.To), stateToken(e.FromRaw), stateToken(e.ToRaw), src)
 }
 
 func (h History) firstCommitDate() string {

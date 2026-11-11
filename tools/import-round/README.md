@@ -104,8 +104,11 @@ equivocada. Un issue sin importar o un error van al reporte y no frenan a
 los demás.
 
 Antes, en un proyecto espejo con eventos de `ImportIssue` anteriores a
-v0.6.0, conviene marcarlos `import_sync` con
-`scripts/backfill_import_sync.sh` (ver el CLAUDE.md del repo).
+v0.6.0, conviene correr `scripts/backfill_import_sync.sh` (ver el CLAUDE.md
+del repo). Marca esos eventos `import_sync` y pone el «creado» de cada
+issue importado en su alta (en v0.5 quedaba con la fecha de la corrida), así
+el historial empieza por el «creado». `ImportIssueEvents` y
+`override_created_at` también alinean el «creado» del issue que tocan.
 
 - Un solo `git log --first-parent -M --name-status` de la carpeta, más
   `git cat-file --batch` para leer cada versión. Los renombres se siguen con

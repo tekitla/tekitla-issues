@@ -39,6 +39,12 @@ func (r *IssueRepository) ImportEvents(ctx context.Context, workspaceIDs []strin
 			return domainerrors.NotFoundError("issue not found", details)
 		}
 		issue := fromIssueRow(&rows[0])
+		// El «creado» de un issue importado antes de v0.6.0 tiene la fecha de
+		// la corrida: se alinea con el alta para que el historial empiece por
+		// él (el contrato lo fija así desde v0.6.0).
+		if err := alignCreatedEvent(tx, issue.ID, issue.CreatedAt); err != nil {
+			return err
+		}
 		refs := make([]string, len(events))
 		for i, ev := range events {
 			if ev.OccurredAt.Before(issue.CreatedAt) {
@@ -96,7 +102,15 @@ func (r *IssueRepository) ImportEvents(ctx context.Context, workspaceIDs []strin
 func overrideCreatedAt(tx *gorm.DB, cur *model.Issue, createdAt time.Time, details map[string]any) (bool, error) {
 	at := createdAt.UTC().Truncate(time.Microsecond)
 	if at.Equal(cur.CreatedAt) {
-		return false, nil
+		// Mismo alta, pero el «creado» puede haber quedado con la fecha de
+		// una corrida de v0.5.
+		var n int64
+		err := tx.Raw(`SELECT count(*) FROM issues.issue_events WHERE issue_id = ? AND kind = 'created' AND created_at <> ?`, cur.ID, at).
+			Scan(&n).Error
+		if err != nil || n == 0 {
+			return false, err
+		}
+		return true, alignCreatedEvent(tx, cur.ID, at)
 	}
 	var first []time.Time
 	err := tx.Raw(`SELECT min(created_at) FROM issues.issue_events
@@ -113,8 +127,12 @@ func overrideCreatedAt(tx *gorm.DB, cur *model.Issue, createdAt time.Time, detai
 	if err := tx.Model(&issueRow{}).Where("id = ?", cur.ID).Update("created_at", at).Error; err != nil {
 		return false, err
 	}
-	if err := tx.Exec(`UPDATE issues.issue_events SET created_at = ? WHERE issue_id = ? AND kind = 'created'`, at, cur.ID).Error; err != nil {
-		return false, err
-	}
-	return true, nil
+	return true, alignCreatedEvent(tx, cur.ID, at)
+}
+
+// alignCreatedEvent pone la fecha del evento «creado» del issue en at (su
+// created_at).
+func alignCreatedEvent(tx *gorm.DB, issueID string, at time.Time) error {
+	return tx.Exec(`UPDATE issues.issue_events SET created_at = ? WHERE issue_id = ? AND kind = 'created' AND created_at <> ?`,
+		at, issueID, at).Error
 }

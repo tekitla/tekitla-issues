@@ -163,14 +163,20 @@ func leadingToken(raw string) string {
 	return strings.ToLower(strings.Trim(strings.TrimSpace(s), "`*_.,;:()"))
 }
 
+// stateToken es el valor del Estado: leadingToken sin lo que no es letra al
+// principio (p. ej. «✅ `resuelto y verificado`» → «resuelto y verificado»).
+func stateToken(raw string) string {
+	raw = strings.TrimLeftFunc(raw, func(r rune) bool { return !unicode.IsLetter(r) && r != '`' && r != '*' })
+	return leadingToken(raw)
+}
+
 // MapState mapea el Estado de Round (§4 del issue 025, y los valores que
 // sumó Victor el 2026-11-11 en el 036: abierto, in-review, front arreglado
 // y resuelto con cualquier aclaración). known = false si el valor no está
 // en la tabla o falta: va como TODO y al reporte. Se ignora lo que no es
 // letra al principio (p. ej. «✅ `resuelto y verificado`»).
 func MapState(raw string) (state issuesv1.IssueState, known bool) {
-	raw = strings.TrimLeftFunc(raw, func(r rune) bool { return !unicode.IsLetter(r) && r != '`' && r != '*' })
-	v := leadingToken(raw)
+	v := stateToken(raw)
 	switch {
 	case v == "open" || v == "pending-validation" || v == "abierto":
 		return issuesv1.IssueState_ISSUE_STATE_TODO, true

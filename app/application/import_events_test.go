@@ -67,6 +67,7 @@ func TestIssueService_ImportIssueEvents(t *testing.T) {
 		"no state":     with(func(e *model.ImportedEvent) { e.Status.ToCategory = model.IssueStateUnspecified }),
 		"empty name":   with(func(e *model.ImportedEvent) { e.Status.FromName = "" }),
 		"long name":    with(func(e *model.ImportedEvent) { e.Status.ToName = strings.Repeat("n", 41) }),
+		"no-op":        with(func(e *model.ImportedEvent) { e.Status.ToName, e.Status.ToCategory = "open", model.IssueStateTodo }),
 	} {
 		_, err := svc.ImportIssueEvents(ctx, as(owner), application.ImportIssueEventsInput{ProjectID: validID, SourceKey: "k", Events: events})
 		if !domainerrors.IsValidation(err) {

@@ -6,6 +6,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -85,38 +86,66 @@ func sendHistories(ctx context.Context, client issuesv1.IssueServiceClient, src 
 		// El alta del histórico (Fecha detectado o el primer commit) manda:
 		// los eventos no pueden quedar antes del alta.
 		created := h.Events[0]
-		if !it.GetCreatedAt().AsTime().Equal(created.Date.UTC().Truncate(time.Microsecond)) {
+		fixCreated := func() error {
 			req := (&Report{}).inspect(h.Doc, src.translate(h.Doc))
 			req.ProjectId = t.project.GetId()
 			req.CreatedAt = timestamppb.New(created.Date)
 			req.OverrideCreatedAt = true
 			callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
 			_, err := client.ImportIssue(callCtx, req)
-			cancel()
-			if err != nil {
+			return err
+		}
+		needsFix := !it.GetCreatedAt().AsTime().Equal(created.Date.UTC().Truncate(time.Microsecond))
+		retryFix := false
+		if needsFix {
+			err := fixCreated()
+			switch {
+			case err == nil:
+				res.CreatedFixed = append(res.CreatedFixed, h.Doc)
+			case overwrite && status.Code(err) == codes.FailedPrecondition:
+				// Una carga anterior dejó eventos antes del alta correcta: se
+				// reescriben primero y se vuelve a intentar.
+				retryFix = true
+			default:
+				fail(h.Doc, "ImportIssue (alta)", err)
+				continue
+			}
+		}
+		if !sendEvents(ctx, client, t, h, overwrite, res, fail) {
+			continue
+		}
+		if retryFix {
+			if err := fixCreated(); err != nil {
 				fail(h.Doc, "ImportIssue (alta)", err)
 				continue
 			}
 			res.CreatedFixed = append(res.CreatedFixed, h.Doc)
 		}
-		events := importedEvents(h)
-		for start := 0; start < len(events); start += importEventsBatch {
-			end := min(start+importEventsBatch, len(events))
-			callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			out, err := client.ImportIssueEvents(callCtx, &issuesv1.ImportIssueEventsRequest{
-				ProjectId: t.project.GetId(), SourceKey: h.Doc.SourceKey, Events: events[start:end], Overwrite: overwrite,
-			})
-			cancel()
-			if err != nil {
-				fail(h.Doc, "ImportIssueEvents", err)
-				break
-			}
-			res.Created += int(out.GetCreated())
-			res.Skipped += int(out.GetSkipped())
-			res.Updated += int(out.GetUpdated())
-		}
 	}
 	return res
+}
+
+// sendEvents manda las transiciones de h en tandas. false si una falló (ya
+// está en el reporte).
+func sendEvents(ctx context.Context, client issuesv1.IssueServiceClient, t *target, h History, overwrite bool, res *SendResult, fail func(*Doc, string, error)) bool {
+	events := importedEvents(h)
+	for start := 0; start < len(events); start += importEventsBatch {
+		end := min(start+importEventsBatch, len(events))
+		callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		out, err := client.ImportIssueEvents(callCtx, &issuesv1.ImportIssueEventsRequest{
+			ProjectId: t.project.GetId(), SourceKey: h.Doc.SourceKey, Events: events[start:end], Overwrite: overwrite,
+		})
+		cancel()
+		if err != nil {
+			fail(h.Doc, "ImportIssueEvents", err)
+			return false
+		}
+		res.Created += int(out.GetCreated())
+		res.Skipped += int(out.GetSkipped())
+		res.Updated += int(out.GetUpdated())
+	}
+	return true
 }
 
 // importedEvents traduce las transiciones de h (sin el alta) al contrato.
@@ -148,7 +177,7 @@ func importedEvents(h History) []*issuesv1.ImportedEvent {
 // primer token (como MapState), a lo sumo 40 runas como el nombre de un
 // estado.
 func stateValue(raw string) string {
-	v := leadingToken(raw)
+	v := stateToken(raw)
 	if v == "" {
 		v = "?"
 	}
