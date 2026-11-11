@@ -19,9 +19,6 @@ var errHistoryNeedsContract = errors.New("el histórico todavía no se puede car
 // (issue 036, parte 1). Por ahora solo con -dry-run. La copia ya pasó por
 // checkGit (salvo -skip-git-check).
 func runHistory(o options, src *source, out io.Writer) error {
-	if !o.dryRun {
-		return errHistoryNeedsContract
-	}
 	docs, broken, err := src.read()
 	if err != nil {
 		return err
@@ -47,7 +44,7 @@ func runHistory(o options, src *source, out io.Writer) error {
 		h.Doc.Body = "" // del cuerpo no se usa nada más: no se guarda
 		rep.Histories = append(rep.Histories, h)
 	}
-	rep.Write(out, true)
+	rep.Write(out)
 	return nil
 }
 
@@ -57,27 +54,20 @@ type HistoryReport struct {
 	Total     int
 	Plan      Plan
 	Broken    []Failure
-	Failed    []Failure
 	Histories []History
-	// Loaded son las claves de eventos ya cargados (vacío en dry-run).
-	Loaded map[string]bool
 	// Detail: listar cada evento.
 	Detail bool
 }
 
-// Write imprime el reporte, con el formato de import-round.
-func (r *HistoryReport) Write(w io.Writer, dryRun bool) {
+// Write imprime el reporte, con el formato de import-round. Por ahora
+// siempre es de un dry-run: falta el contrato para cargar.
+func (r *HistoryReport) Write(w io.Writer) {
 	p := func(format string, args ...any) { fmt.Fprintf(w, format+"\n", args...) }
-	if dryRun {
-		p("== import-round -historico (dry-run: no se llamó al servicio)")
-	} else {
-		p("== import-round -historico")
-	}
-	var events, status, category, fromCommit, fromFile, pending int
+	p("== import-round -historico (dry-run: no se llamó al servicio)")
+	var events, status, category, fromCommit, fromFile int
 	var noGit, createdFile, detectedLate, closedFile, resolvedIgnored, unknown, unreadable []History
 	for _, h := range r.Histories {
 		events += len(h.Events)
-		pending += len(h.Pending(r.Loaded))
 		for _, e := range h.Events {
 			if e.Kind == KindStatus {
 				status++
@@ -104,11 +94,10 @@ func (r *HistoryReport) Write(w io.Writer, dryRun bool) {
 		add(&unknown, len(h.Unknown) > 0)
 		add(&unreadable, len(h.Unreadable) > 0)
 	}
-	p("Archivos leídos: %d · con histórico: %d · omitidos por número: %d · rotos: %d · con error: %d",
-		r.Total, len(r.Histories)-len(noGit), countLosers(r.Plan.Duplicates), len(r.Broken), len(r.Failed))
+	p("Archivos leídos: %d · con histórico: %d · omitidos por número: %d · rotos: %d",
+		r.Total, len(r.Histories)-len(noGit), countLosers(r.Plan.Duplicates), len(r.Broken))
 	p("Eventos: %d (altas: %d · cambios de Estado: %d, %d con cambio de categoría) · de commits: %d · del archivo: %d",
 		events, events-status, status, category, fromCommit, fromFile)
-	p("Nuevos: %d · ya cargados: %d", pending, events-pending)
 	p("Confianza: histórico aproximado (los estados se cambiaban a mano y a veces tarde)")
 
 	section := func(title string, n int) bool {
@@ -175,11 +164,6 @@ func (r *HistoryReport) Write(w io.Writer, dryRun bool) {
 			}
 		}
 	}
-	if section("Con error al leer git", len(r.Failed)) {
-		for _, f := range r.Failed {
-			p("  %s: %s", f.Doc.Path, f.Err)
-		}
-	}
 	if section("Archivos rotos", len(r.Broken)) {
 		for _, f := range r.Broken {
 			p("  %s: %s", f.Doc.Path, f.Err)
@@ -203,7 +187,7 @@ func (e HistoryEvent) describe() string {
 func (h History) firstCommitDate() string {
 	for _, e := range h.Events {
 		if e.Kind == KindCreated && e.Source == SourceCommit {
-			return e.Date.UTC().Format(time.DateOnly)
+			return e.Date.Format(time.DateOnly) // en su zona, como dayAfter
 		}
 	}
 	return "?"

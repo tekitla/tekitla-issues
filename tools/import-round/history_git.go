@@ -13,7 +13,8 @@ import (
 // Lectura de git para el histórico (issue 036). Solo lectura: git log y
 // git cat-file no tocan la copia.
 
-// gitRun corre git en dir y devuelve la salida cruda.
+// gitRun corre git en dir, sin modificar nada, y devuelve la salida cruda.
+// Las rutas salen sin comillas ni escapes (core.quotepath=off).
 func gitRun(dir string, args ...string) ([]byte, error) {
 	cmd := exec.Command("git", append([]string{"-C", dir, "-c", "core.quotepath=off"}, args...)...)
 	var stderr strings.Builder
@@ -33,19 +34,23 @@ const commitMark = "\x1ecommit "
 // que tenía en cada uno (relativa a la raíz del repo). Un solo git log de
 // toda la carpeta, con detección de renombres (-M, la misma de --follow):
 // se recorre del commit más nuevo al más viejo y un renombre pasa la
-// identidad del archivo a su nombre anterior. Sin merges: el cambio cuenta
-// en el commit que lo hizo.
+// identidad del archivo a su nombre anterior.
+//
+// Solo la historia de main (--first-parent): un cambio hecho en una rama
+// cuenta cuando llega a main, en el merge, con su fecha. Así la historia es
+// una línea y dos ramas paralelas no se intercalan (eso inventaría
+// transiciones de ida y vuelta).
 func folderLog(dir string, files []string) (map[string][]Version, error) {
 	prefix, err := gitRun(dir, "rev-parse", "--show-prefix")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("-historico lee git y %s no es un repo git: %w", dir, err)
 	}
 	// alias: ruta (en el commit que se está leyendo) -> archivo actual.
 	alias := map[string]string{}
 	for _, f := range files {
 		alias[strings.TrimSpace(string(prefix))+f] = f
 	}
-	out, err := gitRun(dir, "log", "-M", "--no-merges", "--name-status", "--format="+commitMark+"%H %cI", "--", ".")
+	out, err := gitRun(dir, "log", "--first-parent", "--diff-merges=first-parent", "-M", "--name-status", "--format="+commitMark+"%H %cI", "--", ".")
 	if err != nil {
 		return nil, err
 	}
@@ -131,10 +136,10 @@ func (b *blobReader) read(commit, file string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("git cat-file: %w", err)
 	}
-	f := strings.Fields(header)
-	if len(f) == 2 && f[1] == "missing" {
+	if strings.HasSuffix(header, " missing\n") {
 		return nil, fmt.Errorf("no está en el commit")
 	}
+	f := strings.Fields(header)
 	if len(f) != 3 || f[1] != "blob" {
 		return nil, fmt.Errorf("git cat-file: respuesta inesperada %q", strings.TrimSpace(header))
 	}

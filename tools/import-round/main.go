@@ -29,7 +29,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -170,13 +169,7 @@ func resolveSource(o options) (*source, error) {
 // git corre git en dir, sin modificar nada, y devuelve la salida sin
 // espacios en los extremos.
 func git(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	b, err := cmd.Output()
-	if err != nil {
-		err = fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
-	}
+	b, err := gitRun(dir, args...)
 	return strings.TrimSpace(string(b)), err
 }
 
@@ -187,6 +180,12 @@ func run(ctx context.Context, o options, out io.Writer) error {
 	}
 	if o.history && src.format != formatRound {
 		return errors.New("-historico es solo para -formato round")
+	}
+	if o.history && !o.dryRun {
+		return errHistoryNeedsContract
+	}
+	if o.detail && !o.history {
+		return errors.New("-detalle es solo con -historico")
 	}
 	if info, err := os.Stat(src.dir); err != nil || !info.IsDir() {
 		if src.format == formatTemplateDocs {

@@ -85,26 +85,34 @@ go run ./tools/import-round -historico -dry-run            # resumen y casos
 go run ./tools/import-round -historico -dry-run -detalle   # además, cada evento
 ```
 
-- Un solo `git log -M --no-merges --name-status` de la carpeta, más
+- Un solo `git log --first-parent -M --name-status` de la carpeta, más
   `git cat-file --batch` para leer cada versión. Los renombres se siguen con
   la misma detección que `--follow`, y la clave es el nombre actual del
   archivo. Solo entra el archivo que se queda con el número, según el mismo
   plan de la importación.
+- **Solo la historia de `main`:** un cambio hecho en una rama cuenta cuando
+  llega a `main` (en el merge, con la fecha del merge). Así dos ramas
+  paralelas no se intercalan, porque eso inventaría transiciones de ida y
+  vuelta.
 - **Alta:** `Fecha detectado` si es de un día anterior al primer commit; si
   no, el primer commit.
 - **Transición:** cada commit en que cambia el valor del `Estado:` (su primer
   token, como en la importación) es una transición con la fecha del commit
   (committer). Cambiar solo el texto alrededor no cuenta. Un commit sin línea
   `Estado:` se salta.
-- **Cierre del archivo (CU-036-2):** si el archivo nace cerrado, ningún commit
-  marca el cierre. Entonces su `Fecha resuelto` es la fecha del cierre, con
-  fuente «archivo», siempre que caiga entre el alta y el primer commit. Si un
-  commit cierra el issue, manda el commit.
+- **Cierre del archivo (CU-036-2):** si el archivo nace cerrado (en su primer
+  commit con `Estado:`), ningún commit marca el cierre. Entonces su
+  `Fecha resuelto` es la fecha del cierre, con fuente «archivo», siempre que
+  caiga entre el alta y ese commit. Si después un commit cierra el issue,
+  ese cierre usa el commit.
 - **Idempotencia (CU-036-1):** cada evento tiene una clave estable:
-  `<clave>#alta`, `<clave>#<sha>` o `<clave>#archivo:resuelto`. Una segunda
-  corrida con lo ya cargado no deja nada pendiente.
-- **Reporte:** totales (eventos, de commits o del archivo, nuevos y ya
-  cargados), altas y cierres tomados del archivo, `Fecha detectado` posterior
-  al primer commit, `Fecha resuelto` sin usar y por qué, estados desconocidos
-  por commit, versiones ilegibles y números repetidos. Todo es «histórico
+  `<clave>#alta`, `<clave>#inicial` (el estado con que nace el archivo, si
+  no es por hacer) o `<clave>#<sha>`. La clave no depende de la fuente:
+  agregar después `Fecha resuelto` no la cambia. Una segunda corrida con lo
+  ya cargado no deja nada pendiente. Reescribir la historia de git (rebase)
+  sí cambia los sha.
+- **Reporte:** totales (eventos, de commits o del archivo), altas y cierres
+  tomados del archivo, `Fecha detectado` posterior al primer commit,
+  `Fecha resuelto` sin usar y por qué, estados desconocidos (una vez por
+  valor), versiones ilegibles y números repetidos. Todo es «histórico
   aproximado»: los estados se cambiaban a mano y a veces tarde.

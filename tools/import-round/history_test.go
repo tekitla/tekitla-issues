@@ -163,7 +163,7 @@ func TestHistory_DatesFromFile(t *testing.T) {
 	h := r.history(f)
 	assertEvents(t, h.Events, []HistoryEvent{
 		{Key: "003-login-lento#alta", Kind: KindCreated, Date: day("2026-05-02T00:00:00Z"), Source: SourceFile},
-		{Key: "003-login-lento#archivo:resuelto", Kind: KindStatus, Date: day("2026-05-20T00:00:00Z"), Source: SourceFile,
+		{Key: "003-login-lento#inicial", Kind: KindStatus, Date: day("2026-05-20T00:00:00Z"), Source: SourceFile,
 			FromRaw: "open", ToRaw: "`resolved`", From: todo, To: done},
 	})
 	if !h.CreatedFromFile || !h.ClosedFromFile {
@@ -180,7 +180,7 @@ func TestHistory_BornClosedWithoutResolvedDate(t *testing.T) {
 	h := r.history(f)
 	assertEvents(t, h.Events, []HistoryEvent{
 		{Key: "004-sin-fecha#alta", Kind: KindCreated, Date: day("2026-06-18T10:00:00Z"), Source: SourceCommit, Commit: c1},
-		{Key: "004-sin-fecha#" + c1, Kind: KindStatus, Date: day("2026-06-18T10:00:00Z"), Source: SourceCommit, Commit: c1,
+		{Key: "004-sin-fecha#inicial", Kind: KindStatus, Date: day("2026-06-18T10:00:00Z"), Source: SourceCommit, Commit: c1,
 			FromRaw: "open", ToRaw: "`won't-do`", From: todo, To: canceled},
 	})
 	if h.ClosedFromFile || h.ResolvedIgnored != "" {
@@ -237,6 +237,7 @@ func TestHistory_UnknownAndMissingState(t *testing.T) {
 	r.commit("2026-06-18T10:00:00Z", map[string]string{f: issueMD("Raro", "`open`", "2026-06-18", "", "x")})
 	r.commit("2026-06-19T10:00:00Z", map[string]string{f: "# Raro\n\nsin cabecera\n"})
 	c3 := r.commit("2026-06-20T10:00:00Z", map[string]string{f: issueMD("Raro", "`en-pausa`", "2026-06-18", "", "x")})
+	r.commit("2026-06-21T10:00:00Z", map[string]string{f: issueMD("Raro", "`en-pausa`", "2026-06-18", "", "y")})
 
 	h := r.history(f)
 	if len(h.Events) != 2 || h.Events[1].Commit != c3 || h.Events[1].To != todo {
@@ -298,7 +299,6 @@ func TestRunHistory(t *testing.T) {
 		"== import-round -historico (dry-run",
 		"Archivos leídos: 3 · con histórico: 2 · omitidos por número: 1",
 		"Eventos: 4 (altas: 2 · cambios de Estado: 2, 2 con cambio de categoría) · de commits: 1 · del archivo: 3",
-		"Nuevos: 4 · ya cargados: 0",
 		"histórico aproximado",
 		"-- Cierre tomado de «Fecha resuelto» (ningún commit lo marca) (1)",
 		"RND-2  " + filepath.Join(r.issues(), "002-b.md"),
@@ -313,6 +313,9 @@ func TestRunHistory(t *testing.T) {
 	o.dryRun = false
 	if err := run(context.Background(), o, &out); err != errHistoryNeedsContract {
 		t.Errorf("sin -dry-run: %v", err)
+	}
+	if err := run(context.Background(), options{dir: r.issues(), dryRun: true, skipGitCheck: true, detail: true}, &out); err == nil {
+		t.Error("-detalle sin -historico debería fallar")
 	}
 	o.dryRun, o.format, o.repo, o.projectKey = true, formatTemplateDocs, "prueba/docs", "PR"
 	if err := run(context.Background(), o, &out); err == nil || !strings.Contains(err.Error(), "-historico") {
@@ -334,5 +337,49 @@ func assertEvents(t *testing.T, got, want []HistoryEvent) {
 		if g != w {
 			t.Errorf("evento %d:\n got %+v\nwant %+v", i, g, w)
 		}
+	}
+}
+
+// Solo la historia de main: dos ramas que tocan el mismo archivo no se
+// intercalan. El cambio de cada rama cuenta en su merge, con su fecha.
+func TestHistory_FirstParentOnly(t *testing.T) {
+	r := newTestRepo(t)
+	const f = "030-ramas.md"
+	r.commit("2026-06-18T10:00:00Z", map[string]string{f: issueMD("Ramas", "`open`", "2026-06-18", "", "x")})
+	// Rama a: pasa a in-progress el 2026-06-20.
+	r.git("", "checkout", "-q", "-b", "a")
+	r.commit("2026-06-20T10:00:00Z", map[string]string{f: issueMD("Ramas", "`in-progress`", "2026-06-18", "", "x")})
+	// Rama b (desde main): edita el cuerpo el 2026-06-21, con Estado open.
+	r.git("", "checkout", "-q", "main")
+	r.git("", "checkout", "-q", "-b", "b")
+	r.commit("2026-06-21T10:00:00Z", map[string]string{"031-otro.md": issueMD("Otro", "`open`", "2026-06-18", "", "x")})
+	r.commit("2026-06-21T11:00:00Z", map[string]string{f: issueMD("Ramas", "`open`", "2026-06-18", "", "x\n\notro párrafo")})
+	r.git("", "checkout", "-q", "main")
+	r.git("2026-06-22T10:00:00Z", "merge", "-q", "--no-ff", "-m", "merge a", "a")
+	m2 := r.git("", "rev-parse", "HEAD")
+	// Merge de b: sin conflicto (b no tocó la línea Estado), queda in-progress.
+	r.git("2026-06-23T10:00:00Z", "merge", "-q", "--no-ff", "-m", "merge b", "b")
+
+	h := r.history(f)
+	if len(h.Events) != 2 {
+		t.Fatalf("una sola transición, quiero alta + 1: %+v", h.Events)
+	}
+	e := h.Events[1]
+	if e.Commit != m2 || e.From != todo || e.To != progress || !e.Date.Equal(day("2026-06-22T10:00:00Z")) {
+		t.Errorf("transición: %+v", e)
+	}
+}
+
+// El primer commit con Estado no es el primero del archivo: el cierre del
+// archivo nacido cerrado igual usa «Fecha resuelto».
+func TestHistory_FirstStateLaterThanFirstCommit(t *testing.T) {
+	r := newTestRepo(t)
+	const f = "040-tarde.md"
+	r.commit("2026-06-18T10:00:00Z", map[string]string{f: "# Tarde\n\nborrador sin cabecera\n"})
+	r.commit("2026-06-19T10:00:00Z", map[string]string{f: issueMD("Tarde", "`resolved`", "2026-06-01", "2026-06-10", "x")})
+
+	h := r.history(f)
+	if !h.ClosedFromFile || len(h.Events) != 2 || h.Events[1].Source != SourceFile || !h.Events[1].Date.Equal(day("2026-06-10T00:00:00Z")) {
+		t.Errorf("history: %+v", h)
 	}
 }

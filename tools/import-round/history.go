@@ -43,7 +43,9 @@ type Version struct {
 // HistoryEvent es un evento del histórico de un issue.
 type HistoryEvent struct {
 	// Key reconoce el evento entre corridas (idempotencia, CU-036-1):
-	// <source_key>#alta, <source_key>#<commit> o <source_key>#archivo:resuelto.
+	// <source_key>#alta, <source_key>#inicial (el estado con que nace el
+	// archivo, si no es TODO) o <source_key>#<commit>. Reescribir la
+	// historia de git (rebase) cambia los sha y, con ellos, las claves.
 	Key  string
 	Kind string
 	Date time.Time
@@ -92,7 +94,7 @@ type History struct {
 //     una transición desde «open» (el alta). Si nace cerrado y tiene
 //     «Fecha resuelto» (entre el alta y el primer commit), esa es la fecha
 //     del cierre, con fuente archivo: ningún commit lo marca. Si no, la
-//     fecha del primer commit.
+//     fecha del primer commit con línea Estado.
 //   - Después, cada commit en que cambia el valor del Estado (el primer
 //     token, como MapState) es una transición. Un commit que solo cambia el
 //     texto alrededor no lo es; un commit sin línea Estado se salta.
@@ -128,13 +130,14 @@ func BuildHistory(cur *Doc, versions []Version) History {
 	usedResolved := false
 
 	prevTok, prevRaw := "", ""
-	for i, v := range readable {
+	for _, v := range readable {
 		tok := leadingToken(v.RawState)
 		if tok == "" {
 			continue
 		}
 		to, known := MapState(v.RawState)
-		if !known {
+		if !known && tok != prevTok {
+			// Una vez por valor: los commits que no lo cambian no se repiten.
 			h.Unknown = append(h.Unknown, UnknownValue{Commit: v.Commit, Value: v.RawState})
 		}
 		if prevTok == "" {
@@ -143,16 +146,18 @@ func BuildHistory(cur *Doc, versions []Version) History {
 			if to == issuesv1.IssueState_ISSUE_STATE_TODO {
 				continue
 			}
-			ev := HistoryEvent{Key: key + "#" + v.Commit, Kind: KindStatus, Date: v.Date, Source: SourceCommit, Commit: v.Commit,
+			// La clave no depende de la fuente: si después se agrega o se
+			// corrige «Fecha resuelto», el evento sigue siendo el mismo.
+			ev := HistoryEvent{Key: key + "#inicial", Kind: KindStatus, Date: v.Date, Source: SourceCommit, Commit: v.Commit,
 				FromRaw: "open", ToRaw: v.RawState, From: issuesv1.IssueState_ISSUE_STATE_TODO, To: to}
-			if isClosed(to) && hasResolved && i == 0 {
+			if isClosed(to) && hasResolved {
 				switch {
 				case dayBefore(resolved, created.Date):
 					h.ResolvedIgnored = "anterior al alta"
 				case dayAfter(resolved, v.Date):
 					h.ResolvedIgnored = "posterior al commit que crea el archivo ya cerrado"
 				default:
-					ev.Key, ev.Date, ev.Source, ev.Commit = key+"#archivo:resuelto", resolved, SourceFile, ""
+					ev.Date, ev.Source, ev.Commit = resolved, SourceFile, ""
 					h.ClosedFromFile, usedResolved = true, true
 				}
 			}
