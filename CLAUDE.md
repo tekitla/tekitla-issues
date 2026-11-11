@@ -280,6 +280,7 @@ make workspace / workspace-off  # co-desarrollar con un checkout local de los pr
 go run ./tools/import-round -dry-run   # importador de Round: solo lee y reporta
 go run ./tools/import-round -user <uid> -addr localhost:5000 -create-project   # importa a RND
 go run ./tools/import-round -formato template-docs -dir <repo de docs> -dry-run   # TK o VR según el repo; -project cambia la clave
+go run ./tools/import-round -historico -dry-run [-detalle]   # histórico de estados de Round desde git (036; cargarlo espera el contrato)
 grpcurl -plaintext localhost:5000 list   # con reflection (no prod)
 grpcurl -plaintext -H 'x-user-id: u1' -d '{"key":"TK","name":"Tekitla"}'   localhost:5000 issues.v1.IssueService/CreateProject
 # sin grpcurl local: docker run --rm --network issues-service_default #   fullstorydev/grpcurl:v1.9.3 -plaintext app:5000 list
