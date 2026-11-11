@@ -37,7 +37,9 @@ type Doc struct {
 	Dir string
 	// RawLabels son tipo, area y repos tal como vienen.
 	RawLabels []string
-	// RawResolved es el campo resuelto ("" si es null o falta).
+	// RawResolved es la fecha de resuelto: el campo resuelto de
+	// template-docs ("" si es null o falta) o la «Fecha resuelto» de Round
+	// (histórico, issue 036).
 	RawResolved string
 	// HasPlan: la carpeta tiene plan.md.
 	HasPlan bool
@@ -109,6 +111,7 @@ func ParseDoc(path, file string, content []byte) (*Doc, error) {
 	doc.RawPriority = fields["prioridad"]
 	doc.RawArea = firstOf(fields, "area principal", "area")
 	doc.RawDate = firstOf(fields, "fecha detectado", "detectado", "fecha")
+	doc.RawResolved = fields["fecha resuelto"]
 	if titleLine >= 0 {
 		lines = append(lines[:titleLine:titleLine], lines[titleLine+1:]...)
 	}

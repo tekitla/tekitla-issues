@@ -15,6 +15,7 @@
 //	go run ./tools/import-round -user <uid> [-addr localhost:5000] [-create-project]
 //	go run ./tools/import-round -dry-run            # sin servidor: solo lee y reporta
 //	go run ./tools/import-round -formato template-docs -dir <repo de docs> -user <uid> [-project TK]
+//	go run ./tools/import-round -historico -dry-run [-detalle]   # histórico de Round desde git (issue 036)
 //
 // Habla gRPC sin TLS con el servicio (local, o por un túnel). Correrlo
 // contra QA o prod lo decide una persona: no hay valores por defecto que
@@ -66,6 +67,9 @@ type options struct {
 	createProject bool
 	dryRun        bool
 	skipGitCheck  bool
+	// history: reconstruir el histórico de estados desde git (issue 036).
+	history bool
+	detail  bool
 
 	// client reemplaza la conexión gRPC (tests).
 	client issuesv1.IssueServiceClient
@@ -82,6 +86,8 @@ func main() {
 	flag.BoolVar(&o.createProject, "create-project", false, "crear el proyecto si no existe")
 	flag.BoolVar(&o.dryRun, "dry-run", false, "solo leer y reportar, sin llamar al servicio")
 	flag.BoolVar(&o.skipGitCheck, "skip-git-check", false, "no verificar que la copia esté en main y al día")
+	flag.BoolVar(&o.history, "historico", false, "round: reconstruir el histórico de estados desde git (issue 036; por ahora solo con -dry-run)")
+	flag.BoolVar(&o.detail, "detalle", false, "con -historico: listar cada evento")
 	flag.Parse()
 
 	if err := run(context.Background(), o, os.Stdout); err != nil {
@@ -179,6 +185,9 @@ func run(ctx context.Context, o options, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if o.history && src.format != formatRound {
+		return errors.New("-historico es solo para -formato round")
+	}
 	if info, err := os.Stat(src.dir); err != nil || !info.IsDir() {
 		if src.format == formatTemplateDocs {
 			return fmt.Errorf("no existe %s: -dir tiene que ser la raíz del repo de docs (la que tiene contenido/issues)", src.dir)
@@ -189,6 +198,9 @@ func run(ctx context.Context, o options, out io.Writer) error {
 		if err := checkGit(src.dir); err != nil {
 			return err
 		}
+	}
+	if o.history {
+		return runHistory(o, src, out)
 	}
 	docs, broken, err := src.read()
 	if err != nil {
