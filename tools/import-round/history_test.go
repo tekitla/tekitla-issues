@@ -445,3 +445,15 @@ func TestHistory_UnknownOncePerValue(t *testing.T) {
 		t.Errorf("unknown %+v, events %d", h.Unknown, len(h.Events))
 	}
 }
+
+// Cierre del archivo el mismo día del alta por commit: no queda antes del
+// alta (el contrato no acepta eventos anteriores al created_at).
+func TestHistory_FileCloseNotBeforeCreated(t *testing.T) {
+	r := newTestRepo(t)
+	const f = "060-mismo-dia.md"
+	r.commit("2026-06-18T10:00:00Z", map[string]string{f: issueMD("Mismo día", "`done`", "2026-06-18", "2026-06-18", "x")})
+	h := r.history(f)
+	if !h.ClosedFromFile || len(h.Events) != 2 || !h.Events[1].Date.Equal(h.Events[0].Date) {
+		t.Errorf("history: %+v", h)
+	}
+}

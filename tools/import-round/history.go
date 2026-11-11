@@ -160,6 +160,11 @@ func BuildHistory(cur *Doc, versions []Version) History {
 					h.ResolvedIgnored = "posterior al primer commit con Estado (que ya lo trae cerrado)"
 				default:
 					ev.Date, ev.Source, ev.Commit = resolved, SourceFile, ""
+					// Mismo día que el alta: la fecha del archivo es medianoche y
+					// el alta puede tener hora. El cierre no va antes del alta.
+					if ev.Date.Before(created.Date) {
+						ev.Date = created.Date
+					}
 					h.ClosedFromFile, usedResolved = true, true
 				}
 			}
