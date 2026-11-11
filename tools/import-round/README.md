@@ -76,14 +76,36 @@ roto no frena a los demás.
 ## Histórico de Round (`-historico`, issue 036)
 
 Reconstruye las transiciones de estado de cada issue de Round desde git, para
-las métricas de flujo (lead time, cerrados por semana, WIP). Por ahora solo
-con `-dry-run`: el contrato de v0.5.0 no tiene cómo cargar un evento con su
-fecha y su fuente. Lo que falta está en las Notas del issue 036.
+las métricas de flujo (lead time, cerrados por semana, WIP), y lo carga en
+Tekitla con `ImportIssueEvents` (protos v0.6.0).
 
 ```bash
 go run ./tools/import-round -historico -dry-run            # resumen y casos
 go run ./tools/import-round -historico -dry-run -detalle   # además, cada evento
+go run ./tools/import-round -historico -user <uid> -addr localhost:5000                 # carga
+go run ./tools/import-round -historico -user <uid> -addr localhost:5000 -sobrescribir   # corrige lo ya cargado
 ```
+
+**Carga.** Va sobre issues ya importados: primero se corre `import-round`
+(el proyecto tiene que existir). Por cada issue:
+
+1. Si su alta en Tekitla no es la del histórico, la corrige con
+   `ImportIssue` y `override_created_at`. Esa llamada también refleja el
+   archivo, como una corrida normal.
+2. Manda sus transiciones con `ImportIssueEvents`. La `source_ref` es el
+   sha del commit, o `inicial` para el estado con que nace el archivo. La
+   fuente es `IMPORT_HISTORY` (commit) o `IMPORT_FILE` (`Fecha resuelto`).
+   Los nombres son los valores del origen (`open`, `in-progress`), a lo
+   sumo 40 caracteres.
+
+Es idempotente: una segunda corrida no agrega nada. Con `-sobrescribir`,
+reescribe los eventos ya cargados (fecha y cambio), para corregir una carga
+equivocada. Un issue sin importar o un error van al reporte y no frenan a
+los demás.
+
+Antes, en un proyecto espejo con eventos de `ImportIssue` anteriores a
+v0.6.0, conviene marcarlos `import_sync` con
+`scripts/backfill_import_sync.sh` (ver el CLAUDE.md del repo).
 
 - Un solo `git log --first-parent -M --name-status` de la carpeta, más
   `git cat-file --batch` para leer cada versión. Los renombres se siguen con
@@ -113,7 +135,8 @@ go run ./tools/import-round -historico -dry-run -detalle   # además, cada event
   agregar después `Fecha resuelto` no la cambia. Una segunda corrida con lo
   ya cargado no deja nada pendiente. Reescribir la historia de git (rebase)
   sí cambia los sha.
-- **Reporte:** totales (eventos, de commits o del archivo), altas y cierres
+- **Reporte:** totales (eventos, de commits o del archivo; al cargar,
+  cargados, ya estaban, reescritos y altas corregidas), altas y cierres
   tomados del archivo, `Fecha detectado` posterior al primer commit,
   `Fecha resuelto` sin usar y por qué, estados desconocidos (una vez por
   valor), versiones ilegibles y números repetidos. Todo es «histórico

@@ -15,7 +15,7 @@ repo docs).
   (`gen/go/issues/v1`): proyectos, issues (`ListIssues`, `GetIssue`,
   `CreateIssue`, `MoveIssue`, `UpdateIssue`, `DiscardIssue`, `RestoreIssue`),
   estados (con `BatchUpdateStatuses`), etiquetas, `CreateComment`,
-  `ListIssueEvents` e `ImportIssue`; `issues.v1.ActorService` (agentes y
+  `ListIssueEvents`, `ImportIssue` e `ImportIssueEvents`; `issues.v1.ActorService` (agentes y
   tokens) e `issues.v1.TokenAuthService` (`ResolveToken`, interno). Los
   comentarios del `.proto` son la especificación.
 - **Quién lo llama**: solo el `tekitla-gateway` (api-gateway), que autentica y
@@ -73,9 +73,13 @@ Reglas de negocio no obvias:
   → `FAILED_PRECONDITION` (reason `STALE_ORDER`). Toma el lock del proyecto.
 - Historial (`issues.issue_events`): toda escritura de un issue registra su
   evento en la misma transacción (creado, estado, título, descripción,
-  prioridad, etiquetas, comentario); reordenar no. Orden por `seq` (identity).
+  prioridad, etiquetas, comentario); reordenar no. Se lista por
+  `(created_at, seq)` (036: un evento importado aparece en su fecha; el
+  cursor lleva las dos columnas y uno de v0.5 es `INVALID_ARGUMENT`).
   El JSONB `data` guarda los nombres de estados y etiquetas al momento del
-  cambio (DTOs en `event_repo.go`: solo agregar campos).
+  cambio (DTOs en `event_repo.go`: solo agregar campos). `source` (036):
+  `live`, `import_history`, `import_file` o `import_sync`; NULL = LIVE (los
+  anteriores a `000006`). Todo evento nuevo lleva su fuente explícita.
 - Etiquetas: máximo 100 por proyecto y 20 por issue; nombre único sin
   mayúsculas (`LABEL_NAME_TAKEN`); borrar una la quita de los issues sin evento.
 - Actores (025): una persona por uid (`issues.actors.user_uid` único), creada
@@ -116,9 +120,20 @@ Reglas de negocio no obvias:
   etiquetas que puso el importador (`issue_labels.imported`): las puestas a
   mano no se tocan (decisión de Victor, plan del 025). Número distinto del
   guardado → `IMPORT_NUMBER_MISMATCH`. Sin cambios no escribe
-  (`UNCHANGED`). El importador está en `tools/import-round`: Round y, con
+  (`UNCHANGED`). Sus eventos van con fuente `import_sync` y el «creado» con
+  el `created_at` del issue (036). `override_created_at` corrige el alta de
+  un issue existente (y la fecha de su «creado»), sin evento; si quedaría
+  después de un evento importado → `IMPORT_EVENTS_BEFORE_CREATED`. El
+  importador está en `tools/import-round`: Round y, con
   `-formato template-docs`, los repos de docs con template-docs (035; ver su
   `README.md`).
+- `ImportIssueEvents` (036): historial con fecha del origen para un issue
+  importado (por `source_key`, `NOT_FOUND` si no hay), solo de una persona.
+  Idempotente por `(issue_id, source_ref)` (índice único parcial de
+  `000006`): lo que ya está se omite, o se reescribe con `overwrite`. Con el
+  lock del issue; un evento anterior al `created_at` del issue →
+  `INVALID_ARGUMENT` sin escribir nada. Solo escribe historial: el estado
+  actual lo maneja `ImportIssue`. Lo usa `tools/import-round -historico`.
 - `rank`: *fractional indexing* (`model/rank.go`, port de `fractional-indexing`
   de rocicorp): base 62, se compara byte a byte (columna `COLLATE "C"`), entre
   dos claves siempre hay otra (`model.RankBetween`, para reordenar en la
@@ -258,7 +273,12 @@ compose, ver `cli/healthcheck.go`) y reflection fuera de prod.
   índices de los órdenes, color/WIP/visibilidad con backfill por categoría) y
   `000005` las del 025 (actores, tokens, asignado, clave de origen,
   `agent_id` y `imported`; solo columnas nullable salvo `imported`, con
-  `DEFAULT false`, que es lo que son todas las etiquetas existentes). El `docker-compose.yml` local las aplica
+  `DEFAULT false`, que es lo que son todas las etiquetas existentes) y
+  `000006` las del 036 (`source` y `source_ref` en `issue_events`, sin
+  DEFAULT, e índice `(issue_id, created_at, seq)`). Marcar `import_sync` los
+  eventos viejos de un proyecto espejo es aparte y revisable:
+  `scripts/backfill_import_sync.sh <qa|prod> <uid> <clave> [--apply]` (sin
+  `--apply` solo muestra). El `docker-compose.yml` local las aplica
   solo al crear el volumen (`docker compose down -v` para empezar de cero).
 - Copiar los datos del servicio entre dos Postgres (con verificación de filas):
   `scripts/migrate_db.sh SRC_URL DST_URL` (dry-run; `--apply` para ejecutar).
@@ -280,7 +300,8 @@ make workspace / workspace-off  # co-desarrollar con un checkout local de los pr
 go run ./tools/import-round -dry-run   # importador de Round: solo lee y reporta
 go run ./tools/import-round -user <uid> -addr localhost:5000 -create-project   # importa a RND
 go run ./tools/import-round -formato template-docs -dir <repo de docs> -dry-run   # TK o VR según el repo; -project cambia la clave
-go run ./tools/import-round -historico -dry-run [-detalle]   # histórico de estados de Round desde git (036; cargarlo espera el contrato)
+go run ./tools/import-round -historico -dry-run [-detalle]   # histórico de estados de Round desde git (036)
+go run ./tools/import-round -historico -user <uid> -addr localhost:5000   # lo carga con ImportIssueEvents (idempotente)
 grpcurl -plaintext localhost:5000 list   # con reflection (no prod)
 grpcurl -plaintext -H 'x-user-id: u1' -d '{"key":"TK","name":"Tekitla"}'   localhost:5000 issues.v1.IssueService/CreateProject
 # sin grpcurl local: docker run --rm --network issues-service_default #   fullstorydev/grpcurl:v1.9.3 -plaintext app:5000 list
@@ -311,7 +332,9 @@ git tag prod-v0.1.0 && git push origin prod-v0.1.0   # prod, automático salvo m
   por proyecto) y `000004` tampoco (estados sin DEFAULT de color, WIP y
   visibilidad): se aplica y se despliega la imagen nueva en seguida, sin
   tráfico de por medio. `000005` sí es compatible con el binario de v0.4: se
-  puede aplicar antes del deploy.
+  puede aplicar antes del deploy. `000006` es compatible con el binario de
+  v0.5 y **tiene que** aplicarse antes del deploy de la imagen que la usa
+  (escribe `source`).
 - Release con cambios en `migrations/`: la guarda de prod bloquea. Aplicar el
   SQL por túnel SSH (`scripts/apply_migration.sh prod <migración> --apply`) y
   lanzar el override.
@@ -323,7 +346,7 @@ git tag prod-v0.1.0 && git push origin prod-v0.1.0   # prod, automático salvo m
 
 ## Protos
 
-Repo de protos: `github.com/tekitla/tekitla-protos`, hoy en `v0.5.0`
+Repo de protos: `github.com/tekitla/tekitla-protos`, hoy en `v0.6.1`
 (`go.mod`). Paquete Go `github.com/tekitla/tekitla-protos/gen/go/issues/v1`
 (alias `issuesv1`), usado solo en `handler/`, `mapper/` y `cli/main.go`.
 
