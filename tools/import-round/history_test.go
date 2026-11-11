@@ -383,3 +383,65 @@ func TestHistory_FirstStateLaterThanFirstCommit(t *testing.T) {
 		t.Errorf("history: %+v", h)
 	}
 }
+
+// Una copia superficial daría un histórico falso: -historico no corre.
+func TestHistory_RefusesShallowClone(t *testing.T) {
+	r := newTestRepo(t)
+	r.commit("2026-06-18T10:00:00Z", map[string]string{"001-a.md": issueMD("A", "`open`", "2026-06-18", "", "x")})
+	r.commit("2026-06-19T10:00:00Z", map[string]string{"001-a.md": issueMD("A", "`done`", "2026-06-18", "", "x")})
+	clone := filepath.Join(t.TempDir(), "clon")
+	r.git("", "clone", "-q", "--depth", "1", "file://"+filepath.ToSlash(r.root), clone)
+	_, err := folderLog(filepath.Join(clone, "Issues"), []string{"001-a.md"})
+	if err == nil || !strings.Contains(err.Error(), "superficial") {
+		t.Errorf("err: %v", err)
+	}
+}
+
+// Pedir algo que no es un archivo (un árbol) no desfasa las lecturas
+// siguientes.
+func TestBlobReader_NonBlobKeepsInSync(t *testing.T) {
+	r := newTestRepo(t)
+	c := r.commit("2026-06-18T10:00:00Z", map[string]string{"001-a.md": "hola\n"})
+	blobs, err := newBlobReader(r.issues())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := blobs.read(c, "Issues"); err == nil || !strings.Contains(err.Error(), "tree") {
+		t.Errorf("árbol: %v", err)
+	}
+	if _, err := blobs.read(c, "Issues/no-existe.md"); err == nil {
+		t.Error("ruta inexistente sin error")
+	}
+	if b, err := blobs.read(c, "Issues/001-a.md"); err != nil || string(b) != "hola\n" {
+		t.Errorf("blob: %q %v", b, err)
+	}
+	if err := blobs.Close(); err != nil {
+		t.Errorf("Close: %v", err)
+	}
+}
+
+func TestUnquotePath(t *testing.T) {
+	for in, want := range map[string]string{
+		`Issues/001-a.md`:          "Issues/001-a.md",
+		`"Issues/001-a\"b.md"`:     `Issues/001-a"b.md`,
+		`"Issues/001-a\\b.md"`:     `Issues/001-a\b.md`,
+		`"Issues/001-a\tb.md"`:     "Issues/001-a\tb.md",
+		`"Issues/001-\303\251.md"`: "Issues/001-é.md",
+	} {
+		if got := unquotePath(in); got != want {
+			t.Errorf("unquotePath(%s) = %q, quiero %q", in, got, want)
+		}
+	}
+}
+
+// Un valor desconocido que vuelve después de otro se reporta una sola vez.
+func TestHistory_UnknownOncePerValue(t *testing.T) {
+	r := newTestRepo(t)
+	const f = "050-vuelve.md"
+	r.commit("2026-06-18T10:00:00Z", map[string]string{f: issueMD("Vuelve", "`abierto`", "2026-06-18", "", "x")})
+	r.commit("2026-06-19T10:00:00Z", map[string]string{f: issueMD("Vuelve", "`in-progress`", "2026-06-18", "", "x")})
+	r.commit("2026-06-20T10:00:00Z", map[string]string{f: issueMD("Vuelve", "`abierto`", "2026-06-18", "", "x")})
+	if h := r.history(f); len(h.Unknown) != 1 || len(h.Events) != 3 {
+		t.Errorf("unknown %+v, events %d", h.Unknown, len(h.Events))
+	}
+}

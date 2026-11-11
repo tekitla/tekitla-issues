@@ -38,11 +38,15 @@ func runHistory(o options, src *source, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	defer blobs.Close()
 	for _, d := range plan.Import {
 		h := BuildHistory(d, readStates(blobs, d, logs[d.File]))
 		h.Doc.Body = "" // del cuerpo no se usa nada más: no se guarda
 		rep.Histories = append(rep.Histories, h)
+	}
+	// Si cat-file murió o se desfasó, el histórico no es confiable: error,
+	// sin reporte.
+	if err := blobs.Close(); err != nil {
+		return err
 	}
 	rep.Write(out)
 	return nil
@@ -135,17 +139,17 @@ func (r *HistoryReport) Write(w io.Writer) {
 			p("  %s-%d  %s  [%s]: %s", r.Key, h.Doc.Number, h.Doc.Path, h.Doc.RawResolved, h.ResolvedIgnored)
 		}
 	}
-	if section("Estado desconocido en algún commit (cuenta como TODO)", len(unknown)) {
+	if section("Issues con un Estado desconocido en algún commit (cuenta como TODO; uno por valor)", len(unknown)) {
 		for _, h := range unknown {
 			for _, u := range h.Unknown {
-				p("  %s  %s  [%s]", h.Doc.Path, short(u.Commit), valueOr(u.Value))
+				p("  %s-%d  %s  %s  [%s]", r.Key, h.Doc.Number, h.Doc.Path, short(u.Commit), valueOr(u.Value))
 			}
 		}
 	}
-	if section("Versiones que no se pudieron leer (no entran)", len(unreadable)) {
+	if section("Issues con versiones que no se pudieron leer (no entran)", len(unreadable)) {
 		for _, h := range unreadable {
 			for _, v := range h.Unreadable {
-				p("  %s  %s  %s: %s", h.Doc.Path, short(v.Commit), v.Path, v.Err)
+				p("  %s-%d  %s  %s  %s: %s", r.Key, h.Doc.Number, h.Doc.Path, short(v.Commit), v.Path, v.Err)
 			}
 		}
 	}

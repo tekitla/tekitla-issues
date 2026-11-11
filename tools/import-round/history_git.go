@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -41,16 +42,26 @@ const commitMark = "\x1ecommit "
 // una línea y dos ramas paralelas no se intercalan (eso inventaría
 // transiciones de ida y vuelta).
 func folderLog(dir string, files []string) (map[string][]Version, error) {
-	prefix, err := gitRun(dir, "rev-parse", "--show-prefix")
+	prefix, err := git(dir, "rev-parse", "--show-prefix")
 	if err != nil {
 		return nil, fmt.Errorf("-historico lee git y %s no es un repo git: %w", dir, err)
 	}
+	// Una copia superficial (clone --depth) daría un histórico falso: todo
+	// nacería en el commit más viejo que tiene.
+	if shallow, err := git(dir, "rev-parse", "--is-shallow-repository"); err != nil || shallow == "true" {
+		return nil, fmt.Errorf("%s es una copia superficial (o no pude saberlo): -historico necesita toda la historia (git fetch --unshallow)", dir)
+	}
+	// prefix se calcula con la ruta del sistema, pero en git las rutas usan
+	// siempre «/».
+	prefix = filepath.ToSlash(prefix)
 	// alias: ruta (en el commit que se está leyendo) -> archivo actual.
 	alias := map[string]string{}
 	for _, f := range files {
-		alias[strings.TrimSpace(string(prefix))+f] = f
+		alias[prefix+f] = f
 	}
-	out, err := gitRun(dir, "log", "--first-parent", "--diff-merges=first-parent", "-M", "--name-status", "--format="+commitMark+"%H %cI", "--", ".")
+	// -m con --first-parent: el merge muestra su diff contra main (igual que
+	// --diff-merges=first-parent, que pide git 2.31 o posterior).
+	out, err := gitRun(dir, "log", "--first-parent", "-m", "-M", "--name-status", "--format="+commitMark+"%H %cI", "--", ".")
 	if err != nil {
 		return nil, err
 	}
@@ -69,6 +80,9 @@ func folderLog(dir string, files []string) (map[string][]Version, error) {
 			f := strings.Split(strings.TrimRight(l, "\r"), "\t")
 			if len(f) < 2 || f[0] == "" {
 				continue
+			}
+			for i := range f[1:] {
+				f[i+1] = unquotePath(f[i+1])
 			}
 			p := f[len(f)-1]
 			file, ok := alias[p]
@@ -101,15 +115,32 @@ func folderLog(dir string, files []string) (map[string][]Version, error) {
 	return versions, nil
 }
 
+// unquotePath: aun con core.quotepath=off, git pone entre comillas (con
+// escapes de C) las rutas con «"», «\» o caracteres de control. Los escapes
+// de C que usa git (\", \\, \t, \n, \ooo) son los mismos de Go.
+func unquotePath(p string) string {
+	if len(p) >= 2 && p[0] == '"' && p[len(p)-1] == '"' {
+		if u, err := strconv.Unquote(p); err == nil {
+			return u
+		}
+	}
+	return p
+}
+
 // blobReader lee archivos de commits con un solo git cat-file --batch.
 type blobReader struct {
-	cmd *exec.Cmd
-	in  io.WriteCloser
-	out *bufio.Reader
+	cmd    *exec.Cmd
+	in     io.WriteCloser
+	out    *bufio.Reader
+	stderr *strings.Builder
+	// broken: la lectura quedó desfasada; las siguientes fallan.
+	broken error
 }
 
 func newBlobReader(dir string) (*blobReader, error) {
 	cmd := exec.Command("git", "-C", dir, "cat-file", "--batch")
+	stderr := &strings.Builder{}
+	cmd.Stderr = stderr
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -121,11 +152,14 @@ func newBlobReader(dir string) (*blobReader, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("git cat-file: %w", err)
 	}
-	return &blobReader{cmd: cmd, in: in, out: bufio.NewReader(out)}, nil
+	return &blobReader{cmd: cmd, in: in, out: bufio.NewReader(out), stderr: stderr}, nil
 }
 
 // read devuelve el contenido de file (relativo a la raíz) en commit.
 func (b *blobReader) read(commit, file string) ([]byte, error) {
+	if b.broken != nil {
+		return nil, b.broken
+	}
 	if strings.ContainsAny(file, "\n") {
 		return nil, fmt.Errorf("ruta con salto de línea: %q", file)
 	}
@@ -134,29 +168,46 @@ func (b *blobReader) read(commit, file string) ([]byte, error) {
 	}
 	header, err := b.out.ReadString('\n')
 	if err != nil {
-		return nil, fmt.Errorf("git cat-file: %w", err)
+		b.broken = fmt.Errorf("git cat-file: %w", err)
+		return nil, b.broken
 	}
 	if strings.HasSuffix(header, " missing\n") {
 		return nil, fmt.Errorf("no está en el commit")
 	}
+	// «<sha> <tipo> <tamaño>»: el sha no tiene espacios, así que los dos
+	// últimos campos son el tipo y el tamaño.
 	f := strings.Fields(header)
-	if len(f) != 3 || f[1] != "blob" {
-		return nil, fmt.Errorf("git cat-file: respuesta inesperada %q", strings.TrimSpace(header))
+	if len(f) < 3 {
+		b.broken = fmt.Errorf("git cat-file: respuesta inesperada %q", strings.TrimSpace(header))
+		return nil, b.broken
 	}
-	size, err := strconv.Atoi(f[2])
+	size, err := strconv.Atoi(f[len(f)-1])
 	if err != nil {
-		return nil, fmt.Errorf("git cat-file: tamaño %q", f[2])
+		b.broken = fmt.Errorf("git cat-file: tamaño %q", f[len(f)-1])
+		return nil, b.broken
 	}
-	buf := make([]byte, size+1) // + el salto de línea final
+	// Siempre se consume el contenido (+ el salto de línea final), aunque no
+	// sea un blob: si no, la respuesta siguiente queda desfasada.
+	buf := make([]byte, size+1)
 	if _, err := io.ReadFull(b.out, buf); err != nil {
-		return nil, fmt.Errorf("git cat-file: %w", err)
+		b.broken = fmt.Errorf("git cat-file: %w", err)
+		return nil, b.broken
+	}
+	if typ := f[len(f)-2]; typ != "blob" {
+		return nil, fmt.Errorf("no es un archivo (%s)", typ)
 	}
 	return buf[:size], nil
 }
 
+// Close termina cat-file. Devuelve el error del proceso (con su stderr) o
+// el primero que dejó la lectura desfasada: en los dos casos el histórico
+// no es confiable.
 func (b *blobReader) Close() error {
 	b.in.Close()
-	return b.cmd.Wait()
+	if err := b.cmd.Wait(); err != nil {
+		return fmt.Errorf("git cat-file: %w: %s", err, strings.TrimSpace(b.stderr.String()))
+	}
+	return b.broken
 }
 
 // readStates completa la línea Estado de cada versión de doc, leída con

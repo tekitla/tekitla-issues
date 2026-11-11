@@ -89,7 +89,9 @@ go run ./tools/import-round -historico -dry-run -detalle   # además, cada event
   `git cat-file --batch` para leer cada versión. Los renombres se siguen con
   la misma detección que `--follow`, y la clave es el nombre actual del
   archivo. Solo entra el archivo que se queda con el número, según el mismo
-  plan de la importación.
+  plan de la importación. Con una copia superficial (`clone --depth`) no
+  corre: el histórico saldría falso. Si `git cat-file` falla a mitad de la
+  lectura, la corrida termina con error y sin reporte.
 - **Solo la historia de `main`:** un cambio hecho en una rama cuenta cuando
   llega a `main` (en el merge, con la fecha del merge). Así dos ramas
   paralelas no se intercalan, porque eso inventaría transiciones de ida y

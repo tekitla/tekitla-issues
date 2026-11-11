@@ -130,14 +130,16 @@ func BuildHistory(cur *Doc, versions []Version) History {
 	usedResolved := false
 
 	prevTok, prevRaw := "", ""
+	seenUnknown := map[string]bool{}
 	for _, v := range readable {
 		tok := leadingToken(v.RawState)
 		if tok == "" {
 			continue
 		}
 		to, known := MapState(v.RawState)
-		if !known && tok != prevTok {
-			// Una vez por valor: los commits que no lo cambian no se repiten.
+		if !known && !seenUnknown[tok] {
+			// Una vez por valor, en el primer commit que lo trae.
+			seenUnknown[tok] = true
 			h.Unknown = append(h.Unknown, UnknownValue{Commit: v.Commit, Value: v.RawState})
 		}
 		if prevTok == "" {
@@ -155,7 +157,7 @@ func BuildHistory(cur *Doc, versions []Version) History {
 				case dayBefore(resolved, created.Date):
 					h.ResolvedIgnored = "anterior al alta"
 				case dayAfter(resolved, v.Date):
-					h.ResolvedIgnored = "posterior al commit que crea el archivo ya cerrado"
+					h.ResolvedIgnored = "posterior al primer commit con Estado (que ya lo trae cerrado)"
 				default:
 					ev.Date, ev.Source, ev.Commit = resolved, SourceFile, ""
 					h.ClosedFromFile, usedResolved = true, true
