@@ -116,7 +116,9 @@ Reglas de negocio no obvias:
   etiquetas que puso el importador (`issue_labels.imported`): las puestas a
   mano no se tocan (decisión de Victor, plan del 025). Número distinto del
   guardado → `IMPORT_NUMBER_MISMATCH`. Sin cambios no escribe
-  (`UNCHANGED`). El importador de Round está en `tools/import-round`.
+  (`UNCHANGED`). El importador está en `tools/import-round`: Round y, con
+  `-formato template-docs`, los repos de docs con template-docs (035; ver su
+  `README.md`).
 - `rank`: *fractional indexing* (`model/rank.go`, port de `fractional-indexing`
   de rocicorp): base 62, se compara byte a byte (columna `COLLATE "C"`), entre
   dos claves siempre hay otra (`model.RankBetween`, para reordenar en la
@@ -277,6 +279,7 @@ go mod tidy                   # después de tocar imports
 make workspace / workspace-off  # co-desarrollar con un checkout local de los protos
 go run ./tools/import-round -dry-run   # importador de Round: solo lee y reporta
 go run ./tools/import-round -user <uid> -addr localhost:5000 -create-project   # importa a RND
+go run ./tools/import-round -formato template-docs -dir <repo de docs> -dry-run   # TK o VR según el repo; -project cambia la clave
 grpcurl -plaintext localhost:5000 list   # con reflection (no prod)
 grpcurl -plaintext -H 'x-user-id: u1' -d '{"key":"TK","name":"Tekitla"}'   localhost:5000 issues.v1.IssueService/CreateProject
 # sin grpcurl local: docker run --rm --network issues-service_default #   fullstorydev/grpcurl:v1.9.3 -plaintext app:5000 list
