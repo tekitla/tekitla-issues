@@ -457,3 +457,15 @@ func TestHistory_FileCloseNotBeforeCreated(t *testing.T) {
 		t.Errorf("history: %+v", h)
 	}
 }
+
+// Cierre del archivo con la fecha del día del commit en una zona adelantada:
+// no queda después del commit que lo trae cerrado.
+func TestHistory_FileCloseNotAfterCommit(t *testing.T) {
+	r := newTestRepo(t)
+	const f = "070-zona.md"
+	r.commit("2026-06-19T00:30:00+14:00", map[string]string{f: issueMD("Zona", "`done`", "2026-06-01", "2026-06-19", "x")})
+	h := r.history(f)
+	if !h.ClosedFromFile || len(h.Events) != 2 || !h.Events[1].Date.Equal(day("2026-06-19T00:30:00+14:00")) {
+		t.Errorf("history: %+v", h.Events)
+	}
+}

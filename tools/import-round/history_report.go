@@ -38,6 +38,7 @@ func runHistory(o options, src *source, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	defer blobs.Close() // por si algo corta antes; el Close de abajo manda
 	for _, d := range plan.Import {
 		h := BuildHistory(d, readStates(blobs, d, logs[d.File]))
 		h.Doc.Body = "" // del cuerpo no se usa nada más: no se guarda

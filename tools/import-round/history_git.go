@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -15,7 +14,9 @@ import (
 // git cat-file no tocan la copia.
 
 // gitRun corre git en dir, sin modificar nada, y devuelve la salida cruda.
-// Las rutas salen sin comillas ni escapes (core.quotepath=off).
+// Con core.quotepath=off las rutas con acentos salen tal cual, pero git
+// igual pone entre comillas las que tienen «"», «\» o caracteres de
+// control: quien lee rutas las pasa por unquotePath.
 func gitRun(dir string, args ...string) ([]byte, error) {
 	cmd := exec.Command("git", append([]string{"-C", dir, "-c", "core.quotepath=off"}, args...)...)
 	var stderr strings.Builder
@@ -48,20 +49,22 @@ func folderLog(dir string, files []string) (map[string][]Version, error) {
 	}
 	// Una copia superficial (clone --depth) daría un histórico falso: todo
 	// nacería en el commit más viejo que tiene.
-	if shallow, err := git(dir, "rev-parse", "--is-shallow-repository"); err != nil || shallow == "true" {
+	// Solo "false" deja pasar: un git anterior a 2.15 no conoce la opción y
+	// la devuelve tal cual.
+	if shallow, err := git(dir, "rev-parse", "--is-shallow-repository"); err != nil || shallow != "false" {
 		return nil, fmt.Errorf("%s es una copia superficial (o no pude saberlo): -historico necesita toda la historia (git fetch --unshallow)", dir)
 	}
-	// prefix se calcula con la ruta del sistema, pero en git las rutas usan
-	// siempre «/».
-	prefix = filepath.ToSlash(prefix)
-	// alias: ruta (en el commit que se está leyendo) -> archivo actual.
+	// alias: ruta (en el commit que se está leyendo) -> archivo actual. El
+	// prefijo de rev-parse ya viene con «/».
 	alias := map[string]string{}
 	for _, f := range files {
 		alias[prefix+f] = f
 	}
 	// -m con --first-parent: el merge muestra su diff contra main (igual que
-	// --diff-merges=first-parent, que pide git 2.31 o posterior).
-	out, err := gitRun(dir, "log", "--first-parent", "-m", "-M", "--name-status", "--format="+commitMark+"%H %cI", "--", ".")
+	// --diff-merges=first-parent, que pide git 2.31 o posterior). Desde 2.31
+	// -m sigue a log.diffMerges: se fija en first-parent para que un
+	// «combined» de la configuración no esconda los cambios de la rama.
+	out, err := gitRun(dir, "-c", "log.diffMerges=first-parent", "log", "--first-parent", "-m", "-M", "--name-status", "--format="+commitMark+"%H %cI", "--", ".")
 	if err != nil {
 		return nil, err
 	}
@@ -135,6 +138,8 @@ type blobReader struct {
 	stderr *strings.Builder
 	// broken: la lectura quedó desfasada; las siguientes fallan.
 	broken error
+	closed bool
+	err    error
 }
 
 func newBlobReader(dir string) (*blobReader, error) {
@@ -164,7 +169,9 @@ func (b *blobReader) read(commit, file string) ([]byte, error) {
 		return nil, fmt.Errorf("ruta con salto de línea: %q", file)
 	}
 	if _, err := fmt.Fprintf(b.in, "%s:%s\n", commit, file); err != nil {
-		return nil, fmt.Errorf("git cat-file: %w", err)
+		// Un pedido a medio escribir se pegaría al siguiente.
+		b.broken = fmt.Errorf("git cat-file: %w", err)
+		return nil, b.broken
 	}
 	header, err := b.out.ReadString('\n')
 	if err != nil {
@@ -178,8 +185,9 @@ func (b *blobReader) read(commit, file string) ([]byte, error) {
 	// últimos campos son el tipo y el tamaño.
 	f := strings.Fields(header)
 	if len(f) < 3 {
-		b.broken = fmt.Errorf("git cat-file: respuesta inesperada %q", strings.TrimSpace(header))
-		return nil, b.broken
+		// «<nombre> ambiguous» y parecidas: sin contenido detrás, la
+		// lectura sigue en fase. Solo falla esta versión.
+		return nil, fmt.Errorf("git cat-file: %s", strings.TrimSpace(header))
 	}
 	size, err := strconv.Atoi(f[len(f)-1])
 	if err != nil {
@@ -199,15 +207,27 @@ func (b *blobReader) read(commit, file string) ([]byte, error) {
 	return buf[:size], nil
 }
 
-// Close termina cat-file. Devuelve el error del proceso (con su stderr) o
-// el primero que dejó la lectura desfasada: en los dos casos el histórico
-// no es confiable.
+// Close termina cat-file; se puede llamar más de una vez (la primera manda).
+// Devuelve el primer error que dejó la lectura desfasada o el del proceso
+// (con su stderr): en los dos casos el histórico no es confiable. Con la
+// lectura desfasada mata el proceso: podría estar trabado escribiendo un
+// contenido que nadie lee.
 func (b *blobReader) Close() error {
-	b.in.Close()
-	if err := b.cmd.Wait(); err != nil {
-		return fmt.Errorf("git cat-file: %w: %s", err, strings.TrimSpace(b.stderr.String()))
+	if b.closed {
+		return b.err
 	}
-	return b.broken
+	b.closed = true
+	b.in.Close()
+	if b.broken != nil {
+		_ = b.cmd.Process.Kill()
+		_ = b.cmd.Wait()
+		b.err = b.broken
+		return b.err
+	}
+	if err := b.cmd.Wait(); err != nil {
+		b.err = fmt.Errorf("git cat-file: %w: %s", err, strings.TrimSpace(b.stderr.String()))
+	}
+	return b.err
 }
 
 // readStates completa la línea Estado de cada versión de doc, leída con
