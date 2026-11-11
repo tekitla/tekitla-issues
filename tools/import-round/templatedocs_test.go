@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -200,7 +201,8 @@ func TestRunTemplateDocs(t *testing.T) {
 		t.Fatalf("projects: %+v\n%s", fake.projects, out)
 	}
 	got := fake.issues[p.GetId()]
-	wantKeys := []string{"002-algo-bloqueado", "003-ya-resuelto", "004-descartado", "005-en-curso", "007-estado-raro", "030-lectura-de-ejemplo"}
+	// La clave de origen es el id.
+	wantKeys := []string{"2", "3", "4", "5", "7", "30"}
 	if len(got) != len(wantKeys) {
 		t.Fatalf("imported %d issues, want %d\n%s", len(got), len(wantKeys), out)
 	}
@@ -209,7 +211,7 @@ func TestRunTemplateDocs(t *testing.T) {
 		if r == nil {
 			t.Fatalf("missing %s\n%s", k, out)
 		}
-		if n, _, _ := ParseName(k + ".md"); r.GetNumber() != n {
+		if fmt.Sprint(r.GetNumber()) != k {
 			t.Errorf("%s: number %d", k, r.GetNumber())
 		}
 	}
@@ -219,7 +221,7 @@ func TestRunTemplateDocs(t *testing.T) {
 
 	// CU-035-2: abierto + alta -> Por hacer, HIGH, etiquetas tipo + area +
 	// repos sin repetir.
-	r := got["030-lectura-de-ejemplo"]
+	r := got["30"]
 	if r.GetState() != issuesv1.IssueState_ISSUE_STATE_TODO || r.GetPriority() != issuesv1.Priority_PRIORITY_HIGH ||
 		!reflect.DeepEqual(r.GetLabelNames(), []string{"feature", "api-demo", "cli-demo"}) ||
 		r.GetTitle() != "Lectura de ejemplo: listar y obtener" {
@@ -232,21 +234,21 @@ func TestRunTemplateDocs(t *testing.T) {
 	}
 
 	// CU-035-3: bloqueado -> En curso con la etiqueta bloqueado.
-	r = got["002-algo-bloqueado"]
+	r = got["2"]
 	if r.GetState() != issuesv1.IssueState_ISSUE_STATE_IN_PROGRESS || !reflect.DeepEqual(r.GetLabelNames(), []string{"deuda", "bloqueado"}) {
 		t.Errorf("002: %v", r)
 	}
 
 	// Resuelto (fecha y plan en la descripción), descartado y en curso.
-	r = got["003-ya-resuelto"]
+	r = got["3"]
 	if r.GetState() != issuesv1.IssueState_ISSUE_STATE_DONE || r.GetPriority() != issuesv1.Priority_PRIORITY_LOW ||
 		!strings.Contains(r.GetDescription(), "/003-ya-resuelto/plan.md)") || !strings.Contains(r.GetDescription(), "Resuelto: 2026-02-01.") {
 		t.Errorf("003: %v", r)
 	}
-	if r := got["004-descartado"]; r.GetState() != issuesv1.IssueState_ISSUE_STATE_CANCELED || r.GetTitle() != "Descartado" {
+	if r := got["4"]; r.GetState() != issuesv1.IssueState_ISSUE_STATE_CANCELED || r.GetTitle() != "Descartado" {
 		t.Errorf("004: %v", r)
 	}
-	if r := got["005-en-curso"]; r.GetState() != issuesv1.IssueState_ISSUE_STATE_IN_PROGRESS || r.GetPriority() != issuesv1.Priority_PRIORITY_MEDIUM {
+	if r := got["5"]; r.GetState() != issuesv1.IssueState_ISSUE_STATE_IN_PROGRESS || r.GetPriority() != issuesv1.Priority_PRIORITY_MEDIUM {
 		t.Errorf("005: %v", r)
 	}
 
@@ -265,7 +267,7 @@ func TestRunTemplateDocs(t *testing.T) {
 			t.Errorf("report misses %q:\n%s", want, out)
 		}
 	}
-	if r := got["007-estado-raro"]; r.GetState() != issuesv1.IssueState_ISSUE_STATE_TODO || r.GetPriority() != issuesv1.Priority_PRIORITY_MEDIUM {
+	if r := got["7"]; r.GetState() != issuesv1.IssueState_ISSUE_STATE_TODO || r.GetPriority() != issuesv1.Priority_PRIORITY_MEDIUM {
 		t.Errorf("007: %v", r)
 	}
 
@@ -281,7 +283,7 @@ func TestRunTemplateDocs(t *testing.T) {
 		t.Fatal(err)
 	}
 	out = runTemplate(t, fake, root, "tekitla/tekitla-docs", "")
-	if !strings.Contains(out, "Importados: 0 · actualizados: 1 · sin cambios: 5") || got["005-en-curso"].GetState() != issuesv1.IssueState_ISSUE_STATE_DONE {
+	if !strings.Contains(out, "Importados: 0 · actualizados: 1 · sin cambios: 5") || got["5"].GetState() != issuesv1.IssueState_ISSUE_STATE_DONE {
 		t.Errorf("after edit:\n%s", out)
 	}
 }
@@ -297,7 +299,7 @@ func TestRunTemplateDocs_ProjectFlag(t *testing.T) {
 	if !strings.Contains(out, "XYZ-5") {
 		t.Errorf("report:\n%s", out)
 	}
-	r := fake.issues["p-XYZ"]["005-en-curso"]
+	r := fake.issues["p-XYZ"]["5"]
 	if !strings.Contains(r.GetDescription(), "https://github.com/vrojas1015/docs/blob/main/contenido/issues/005-en-curso/issue.md") {
 		t.Errorf("description: %q", r.GetDescription())
 	}
@@ -376,7 +378,7 @@ func TestParseTemplateDoc(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if doc.Number != 30 || doc.SourceKey != "030-lectura-de-ejemplo" || doc.Slug != "lectura-de-ejemplo" || doc.FolderNumber != 0 ||
+	if doc.Number != 30 || doc.SourceKey != "30" || doc.Dir != "030-lectura-de-ejemplo" || doc.Slug != "lectura-de-ejemplo" || doc.FolderNumber != 0 ||
 		doc.RawDate != "2026-01-10" || doc.RawResolved != "" || !strings.HasPrefix(doc.Body, "## Contexto") {
 		t.Errorf("doc: %+v", doc)
 	}
@@ -389,6 +391,19 @@ func TestParseTemplateDoc(t *testing.T) {
 	doc, err = ParseTemplateDoc("p", "009-x", []byte("---\nid: 9\n---\nTexto\n# No es el título\n"))
 	if err != nil || doc.Title != "x" || !strings.Contains(doc.Body, "# No es el título") {
 		t.Errorf("title from slug: %+v %v", doc, err)
+	}
+
+	// Cierre con espacios al final o con «...».
+	for _, c := range []string{"---\nid: 9\n---  \nTexto\n", "--- \nid: 9\n...\nTexto\n"} {
+		if doc, err := ParseTemplateDoc("p", "009-x", []byte(c)); err != nil || doc.Body != "Texto" {
+			t.Errorf("closing %q: %+v %v", c, doc, err)
+		}
+	}
+
+	// Un # distinto de titulo se queda en el cuerpo.
+	doc, err = ParseTemplateDoc("p", "009-x", []byte("---\nid: 9\ntitulo: Corto\n---\n# Otra cosa\n\nTexto\n"))
+	if err != nil || doc.Title != "Corto" || !strings.HasPrefix(doc.Body, "# Otra cosa") {
+		t.Errorf("different heading: %+v %v", doc, err)
 	}
 
 	// id distinto de la carpeta: manda el id y se avisa.
@@ -450,13 +465,25 @@ func TestMapTemplate(t *testing.T) {
 	}
 
 	long := strings.Repeat("a", 50)
-	got := TemplateLabels([]string{"Feature", "", "api", "api", " cli ", "null", long, "bloqueado"}, true)
-	want := []string{"feature", "api", "cli", strings.Repeat("a", 40), "bloqueado"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("TemplateLabels = %v, want %v", got, want)
+	got, dropped := TemplateLabels([]string{"Feature", "", "api", "api", " cli ", "null", long, "bloqueado"}, true)
+	want := []string{"feature", "bloqueado", "api", "cli", strings.Repeat("a", 40)}
+	if !reflect.DeepEqual(got, want) || dropped {
+		t.Errorf("TemplateLabels = %v %v, want %v", got, dropped, want)
 	}
-	if got := TemplateLabels(nil, false); got != nil {
+	if got, _ := TemplateLabels(nil, false); got != nil {
 		t.Errorf("no labels: %v", got)
+	}
+	if got, _ := TemplateLabels(nil, true); !reflect.DeepEqual(got, []string{"bloqueado"}) {
+		t.Errorf("only blocked: %v", got)
+	}
+	// Más de 20: se quedan tipo, bloqueado y los primeros repos.
+	many := []string{"feature", "area"}
+	for i := 0; i < 25; i++ {
+		many = append(many, fmt.Sprintf("repo-%02d", i))
+	}
+	got, dropped = TemplateLabels(many, true)
+	if !dropped || len(got) != MaxLabelsPerIssue || got[1] != "bloqueado" || got[19] != "repo-16" {
+		t.Errorf("many labels: %v %v", got, dropped)
 	}
 }
 
@@ -465,5 +492,68 @@ func TestTemplateDescription_Truncated(t *testing.T) {
 	desc, truncated := TemplateDescription(doc, "o/r", "https://github.com/o/r/blob/main/contenido/issues/")
 	if !truncated || len([]rune(desc)) > DescriptionMaxLen || !strings.HasSuffix(desc, "/001-x/plan.md).") {
 		t.Errorf("truncated %v len %d", truncated, len([]rune(desc)))
+	}
+}
+
+// Review: un id repetido por error lo gana la carpeta que coincide con su
+// número, aunque otra ordene antes por slug; renombrar el slug de la carpeta
+// sigue actualizando el mismo issue; un título largo se recorta y se avisa.
+func TestRunTemplateDocs_Identity(t *testing.T) {
+	long := strings.Repeat("t", 250)
+	root := writeFixture(t, map[string]string{
+		"010-arreglo/issue.md": "---\nid: 11\ntitulo: Mal numerado\nestado: abierto\nprioridad: media\ntipo: feature\ncreado: 2026-01-01\n---\n",
+		"011-zeta/issue.md":    "---\nid: 11\ntitulo: " + long + "\nestado: abierto\nprioridad: media\ntipo: feature\ncreado: 2026-01-01\n---\n",
+	})
+	fake := newFake()
+	out := runTemplate(t, fake, root, "tekitla/tekitla-docs", "")
+	r := fake.issues["p-TK"]["11"]
+	if r == nil || len([]rune(r.GetTitle())) != TitleMaxLen || !strings.Contains(r.GetDescription(), "/011-zeta/issue.md") {
+		t.Fatalf("winner: %v\n%s", r, out)
+	}
+	for _, want := range []string{"queda afuera: " + filepath.Join(root, IssuesSubdir, "010-arreglo", "issue.md"),
+		"-- id distinto del número de la carpeta (se usa el id) (1)", "-- Título recortado (más de 200 caracteres) (1)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("report misses %q:\n%s", want, out)
+		}
+	}
+
+	// Se arregla el 010 (id 10) y se renombra el slug del 011: TK-11 se
+	// actualiza (no queda congelado) y TK-10 se crea.
+	if err := os.RemoveAll(filepath.Join(root, IssuesSubdir, "010-arreglo")); err != nil {
+		t.Fatal(err)
+	}
+	writeIssue(t, root, "010-arreglo/issue.md", "---\nid: 10\ntitulo: Bien numerado\nestado: abierto\nprioridad: media\ntipo: feature\ncreado: 2026-01-01\n---\n")
+	if err := os.Rename(filepath.Join(root, IssuesSubdir, "011-zeta"), filepath.Join(root, IssuesSubdir, "011-zeta-nuevo")); err != nil {
+		t.Fatal(err)
+	}
+	out = runTemplate(t, fake, root, "tekitla/tekitla-docs", "")
+	if !strings.Contains(out, "Importados: 1 · actualizados: 1 · sin cambios: 0 · con error: 0") ||
+		!strings.Contains(fake.issues["p-TK"]["11"].GetDescription(), "/011-zeta-nuevo/issue.md") {
+		t.Errorf("after fix and rename:\n%s", out)
+	}
+
+	// -repo en otras mayúsculas no cambia la descripción (CU-035-4).
+	var buf strings.Builder
+	o := options{format: formatTemplateDocs, dir: root, repo: "Tekitla/Tekitla-Docs", user: "u1", skipGitCheck: true, client: fake}
+	if err := run(context.Background(), o, &buf); err != nil || !strings.Contains(buf.String(), "Importados: 0 · actualizados: 0") {
+		t.Errorf("repo case: %v\n%s", err, buf.String())
+	}
+}
+
+func TestRun_MissingIssuesDir(t *testing.T) {
+	o := options{format: formatTemplateDocs, dir: t.TempDir(), repo: "tekitla/tekitla-docs", dryRun: true}
+	if err := run(context.Background(), o, &strings.Builder{}); err == nil || !strings.Contains(err.Error(), "raíz del repo de docs") {
+		t.Errorf("missing contenido/issues: %v", err)
+	}
+}
+
+func writeIssue(t *testing.T, root, name, content string) {
+	t.Helper()
+	path := filepath.Join(root, IssuesSubdir, filepath.FromSlash(name))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

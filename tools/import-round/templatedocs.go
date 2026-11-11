@@ -73,23 +73,19 @@ type frontmatter struct {
 var errNoFrontmatter = errors.New("sin frontmatter (--- al principio del archivo)")
 
 // splitFrontmatter separa el YAML del cuerpo. El texto ya viene sin BOM y con
-// \n.
+// \n. Abre con una línea --- y cierra con --- o ... (YAML acepta los dos),
+// con o sin espacios al final.
 func splitFrontmatter(text string) (yamlText, body string, err error) {
-	if !strings.HasPrefix(text, "---\n") {
+	lines := strings.Split(text, "\n")
+	if strings.TrimRight(lines[0], " \t") != "---" {
 		return "", "", errNoFrontmatter
 	}
-	rest := text[len("---\n"):]
-	if strings.HasPrefix(rest, "---\n") || rest == "---" {
-		return "", strings.TrimPrefix(rest, "---"), nil
-	}
-	end := strings.Index(rest, "\n---\n")
-	if end < 0 {
-		if strings.HasSuffix(rest, "\n---") {
-			return rest[:len(rest)-len("\n---")], "", nil
+	for i := 1; i < len(lines); i++ {
+		if l := strings.TrimRight(lines[i], " \t"); l == "---" || l == "..." {
+			return strings.Join(lines[1:i], "\n"), strings.Join(lines[i+1:], "\n"), nil
 		}
-		return "", "", errors.New("frontmatter sin cerrar (falta la línea ---)")
 	}
-	return rest[:end], rest[end+len("\n---\n"):], nil
+	return "", "", errors.New("frontmatter sin cerrar (falta la línea ---)")
 }
 
 // ParseTemplateDoc lee el issue.md de la carpeta dir (p. ej.
@@ -124,8 +120,11 @@ func ParseTemplateDoc(path, dir string, content []byte) (*Doc, error) {
 		return nil, fmt.Errorf("id %d: tiene que ser mayor que 0", *fm.ID)
 	}
 
+	// La clave de origen es el id (no la carpeta): el id es la identidad del
+	// issue en template-docs y no se renumera, y así renombrar el slug de la
+	// carpeta sigue actualizando el mismo issue.
 	doc := &Doc{
-		Path: path, File: "issue.md", Dir: dir, SourceKey: dir,
+		Path: path, File: "issue.md", Dir: dir, SourceKey: strconv.Itoa(int(*fm.ID)),
 		Number: *fm.ID, Slug: m[2],
 		Title:    strings.TrimSpace(fm.Titulo),
 		RawState: fm.Estado, RawPriority: fm.Prioridad, RawDate: fm.Creado,
@@ -136,14 +135,18 @@ func ParseTemplateDoc(path, dir string, content []byte) (*Doc, error) {
 	}
 	doc.RawLabels = append([]string{fm.Tipo, fm.Area}, fm.Repos...)
 
-	// El cuerpo, sin el título (# ...) que repite titulo.
+	// El cuerpo, sin el título (# ...) si repite titulo (o si no hay titulo:
+	// entonces es el título). Un # distinto de titulo se queda en el cuerpo.
 	lines := strings.Split(body, "\n")
 	for i, line := range lines {
 		if strings.HasPrefix(line, "# ") {
+			heading := strings.TrimSpace(line[2:])
 			if doc.Title == "" {
-				doc.Title = strings.TrimSpace(line[2:])
+				doc.Title = heading
 			}
-			lines = append(lines[:i:i], lines[i+1:]...)
+			if heading == doc.Title {
+				lines = append(lines[:i:i], lines[i+1:]...)
+			}
 			break
 		}
 		if strings.TrimSpace(line) != "" {
@@ -232,27 +235,32 @@ func MapTemplatePriority(raw string) (priority issuesv1.Priority, known bool) {
 	return issuesv1.Priority_PRIORITY_MEDIUM, false
 }
 
-// TemplateLabels arma las etiquetas: tipo, area y repos (en ese orden), más
-// BlockedLabel si blocked. En minúsculas, a LabelMaxLen runas, sin vacías ni
-// repetidas (area suele repetir uno de los repos).
-func TemplateLabels(raw []string, blocked bool) []string {
-	if blocked {
-		raw = append(append([]string(nil), raw...), BlockedLabel)
+// MaxLabelsPerIssue es el máximo de etiquetas de un issue en Tekitla.
+const MaxLabelsPerIssue = 20
+
+// TemplateLabels arma las etiquetas: tipo, BlockedLabel si blocked, area y
+// repos (en ese orden). Normalizadas (normalizeLabel), sin vacías ni
+// repetidas (area suele repetir uno de los repos) y a MaxLabelsPerIssue como
+// máximo: las que sobran (repos del final) se pierden y dropped = true.
+func TemplateLabels(raw []string, blocked bool) (labels []string, dropped bool) {
+	if blocked && len(raw) > 0 {
+		raw = append([]string{raw[0], BlockedLabel}, raw[1:]...)
+	} else if blocked {
+		raw = []string{BlockedLabel}
 	}
-	var out []string
 	seen := map[string]bool{}
 	for _, r := range raw {
-		s := strings.ToLower(strings.TrimSpace(r))
-		if utf8.RuneCountInString(s) > LabelMaxLen {
-			s = strings.TrimSpace(string([]rune(s)[:LabelMaxLen]))
-		}
+		s := normalizeLabel(r)
 		if s == "" || s == "null" || seen[s] {
 			continue
 		}
+		if len(labels) == MaxLabelsPerIssue {
+			return labels, true
+		}
 		seen[s] = true
-		out = append(out, s)
+		labels = append(labels, s)
 	}
-	return out
+	return labels, false
 }
 
 // TemplateDescription arma la descripción: el cuerpo y un pie con el enlace

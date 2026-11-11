@@ -128,12 +128,16 @@ func resolveSource(o options) (*source, error) {
 		}
 		repo := strings.TrimSpace(o.repo)
 		if repo == "" {
-			repo = RepoFromRemote(gitOutput(o.dir, "remote", "get-url", "origin"))
+			remote, _ := git(o.dir, "remote", "get-url", "origin")
+			repo = RepoFromRemote(remote)
 		}
+		// GitHub no distingue mayúsculas: en minúsculas, la descripción no
+		// cambia según cómo se escribió -repo (CU-035-4).
+		repo = strings.ToLower(repo)
 		if repo == "" {
 			return nil, fmt.Errorf("no sé de qué repo de GitHub es %s (sin remoto origin de GitHub): usa -repo owner/repo", o.dir)
 		}
-		known, isKnown := KnownRepos[strings.ToLower(repo)]
+		known, isKnown := KnownRepos[repo]
 		key := o.projectKey
 		if key == "" {
 			if !isKnown {
@@ -157,19 +161,29 @@ func resolveSource(o options) (*source, error) {
 	return nil, fmt.Errorf("formato desconocido %q: round o template-docs", o.format)
 }
 
-// gitOutput corre git en dir y devuelve la salida ("" si falla).
-func gitOutput(dir string, args ...string) string {
-	b, err := exec.Command("git", append([]string{"-C", dir}, args...)...).Output()
+// git corre git en dir, sin modificar nada, y devuelve la salida sin
+// espacios en los extremos.
+func git(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	b, err := cmd.Output()
 	if err != nil {
-		return ""
+		err = fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
 	}
-	return strings.TrimSpace(string(b))
+	return strings.TrimSpace(string(b)), err
 }
 
 func run(ctx context.Context, o options, out io.Writer) error {
 	src, err := resolveSource(o)
 	if err != nil {
 		return err
+	}
+	if info, err := os.Stat(src.dir); err != nil || !info.IsDir() {
+		if src.format == formatTemplateDocs {
+			return fmt.Errorf("no existe %s: -dir tiene que ser la raíz del repo de docs (la que tiene contenido/issues)", src.dir)
+		}
+		return fmt.Errorf("no existe la carpeta %s", src.dir)
 	}
 	if !o.skipGitCheck {
 		if err := checkGit(src.dir); err != nil {
@@ -181,6 +195,11 @@ func run(ctx context.Context, o options, out io.Writer) error {
 		return err
 	}
 	rep := &Report{Format: src.format, Key: src.key, Broken: broken, Total: len(docs)}
+	for _, d := range docs {
+		if d.FolderNumber != 0 {
+			rep.IDMismatch = append(rep.IDMismatch, d)
+		}
+	}
 	if o.dryRun {
 		plan := MakePlan(docs, Existing{})
 		rep.Plan = plan
@@ -242,16 +261,7 @@ func run(ctx context.Context, o options, out io.Writer) error {
 // cambios en la carpeta que se lee y con el mismo commit que origin/main en
 // el remoto (git ls-remote no toca la copia).
 func checkGit(dir string) error {
-	git := func(args ...string) (string, error) {
-		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-		var stderr strings.Builder
-		cmd.Stderr = &stderr
-		b, err := cmd.Output()
-		if err != nil {
-			err = fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
-		}
-		return strings.TrimSpace(string(b)), err
-	}
+	git := func(args ...string) (string, error) { return git(dir, args...) }
 	branch, err := git("rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
 		return fmt.Errorf("%s no es un repo git (usa -skip-git-check si es a propósito): %w", dir, err)
@@ -384,8 +394,8 @@ type translation struct {
 	Labels      []string
 	Description string
 	Truncated   bool
-	// NumberMismatch: el id no coincide con el número de la carpeta.
-	NumberMismatch bool
+	// LabelsDropped: había más de MaxLabelsPerIssue etiquetas.
+	LabelsDropped bool
 }
 
 // translateRound traduce un issue de Round (§4 del issue 025).
@@ -408,9 +418,8 @@ func translateTemplate(d *Doc, repo, baseURL string) translation {
 	t.State, blocked, t.StateKnown = MapTemplateState(d.RawState)
 	t.Priority, t.PriorityKnown = MapTemplatePriority(d.RawPriority)
 	t.CreatedAt, _ = ParseDate(d.RawDate)
-	t.Labels = TemplateLabels(d.RawLabels, blocked)
+	t.Labels, t.LabelsDropped = TemplateLabels(d.RawLabels, blocked)
 	t.Description, t.Truncated = TemplateDescription(d, repo, baseURL)
-	t.NumberMismatch = d.FolderNumber != 0
 	return t
 }
 
@@ -435,7 +444,9 @@ type Report struct {
 	Truncated       []*Doc
 	// IDMismatch: template-docs con un id distinto del número de la carpeta
 	// (se usa el id).
-	IDMismatch []*Doc
+	IDMismatch     []*Doc
+	TitleTruncated []*Doc
+	LabelsDropped  []*Doc
 }
 
 // inspect arma el request de un issue ya traducido y anota lo que no se
@@ -450,11 +461,15 @@ func (r *Report) inspect(d *Doc, t translation) *issuesv1.ImportIssueRequest {
 	if t.Truncated {
 		r.Truncated = append(r.Truncated, d)
 	}
-	if t.NumberMismatch {
-		r.IDMismatch = append(r.IDMismatch, d)
+	if t.LabelsDropped {
+		r.LabelsDropped = append(r.LabelsDropped, d)
+	}
+	title, cut := clampTitle(d.Title)
+	if cut {
+		r.TitleTruncated = append(r.TitleTruncated, d)
 	}
 	req := &issuesv1.ImportIssueRequest{
-		SourceKey: d.SourceKey, Number: d.Number, Title: d.Title, Description: t.Description,
+		SourceKey: d.SourceKey, Number: d.Number, Title: title, Description: t.Description,
 		Priority: t.Priority, State: t.State, LabelNames: t.Labels,
 	}
 	if !t.CreatedAt.IsZero() {
@@ -544,6 +559,16 @@ func (r *Report) Write(w io.Writer, dryRun bool) {
 	if section("id distinto del número de la carpeta (se usa el id)", len(r.IDMismatch)) {
 		for _, d := range r.IDMismatch {
 			p("  %s-%d  %s (carpeta %d)", r.Key, d.Number, d.Path, d.FolderNumber)
+		}
+	}
+	if section("Título recortado (más de 200 caracteres)", len(r.TitleTruncated)) {
+		for _, d := range r.TitleTruncated {
+			p("  %s", d.Path)
+		}
+	}
+	if section("Etiquetas recortadas (más de 20: se quedan las primeras)", len(r.LabelsDropped)) {
+		for _, d := range r.LabelsDropped {
+			p("  %s", d.Path)
 		}
 	}
 	if section("Descripción recortada (más de 20000 caracteres)", len(r.Truncated)) {

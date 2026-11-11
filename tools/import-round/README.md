@@ -10,8 +10,10 @@ de origen en solo lectura. Tiene dos formatos (`-formato`):
 
 Los dos usan el mismo plan (qué archivo se queda con cada número), el mismo
 reporte y la misma llamada. Se puede volver a correr: la clave de origen
-(carpeta o archivo, número + slug) reconoce cada issue. Una corrida sin
-cambios no crea ni cambia nada. El repo de docs manda: lo que se cambie en
+reconoce cada issue (Round: el nombre del archivo, número + slug;
+template-docs: el `id`, así renombrar el slug de la carpeta sigue
+actualizando el mismo issue). Una corrida sin cambios no crea ni cambia
+nada. El repo de docs manda: lo que se cambie en
 el panel lo pisa la corrida siguiente, salvo las etiquetas puestas a mano.
 
 ## Cómo se corre
@@ -48,16 +50,17 @@ go run ./tools/import-round -formato template-docs -dir <repo> -user <uid> -proj
 
 | Frontmatter | Tekitla |
 |---|---|
-| `id` | Número del issue (`TK-30` = `id: 30`). Si no coincide con el número de la carpeta, manda el `id` y el reporte lo avisa |
-| `titulo` | Título (sin `titulo`: el `# ` del cuerpo; sin ninguno: el slug) |
+| `id` | Número del issue y clave de origen (`TK-30` = `id: 30`). Si no coincide con el número de la carpeta, manda el `id` y el reporte lo avisa. Con un `id` repetido gana la carpeta cuyo número coincide; las demás quedan afuera |
+| `titulo` | Título (sin `titulo`: el `# ` del cuerpo; sin ninguno: el slug). Más de 200 caracteres: se recorta y se avisa |
 | `estado`: `abierto` · `en-curso` · `bloqueado` · `resuelto` · `descartado` | Por hacer · En curso · En curso + etiqueta `bloqueado` · Hecho · Descartado |
 | `prioridad`: `alta` · `media` · `baja` | `HIGH` · `MEDIUM` · `LOW` |
-| `tipo`, `area`, `repos` | Etiquetas, en minúsculas y sin repetir |
+| `tipo`, `area`, `repos` | Etiquetas, en minúsculas y sin repetir (`bloqueado` va después de `tipo`). Más de 20: se quedan las primeras y se avisa |
 | `creado` | Fecha de alta (solo al crear) |
 | `resuelto` | Línea «Resuelto: AAAA-MM-DD» al pie de la descripción. El contrato no tiene esa fecha |
-| Cuerpo | Descripción, sin el `# ` del título, con enlace al `issue.md` en GitHub (rama `main`) y al `plan.md` si lo hay |
+| Cuerpo | Descripción, sin el `# ` que repite el título, con enlace al `issue.md` en GitHub (rama `main`) y al `plan.md` si lo hay |
 
-Solo se leen las carpetas `<número>-<slug>` de `contenido/issues`. ADRs,
+El frontmatter abre con `---` y cierra con `---` o `...`. Solo se leen las
+carpetas `<número>-<slug>` de `contenido/issues`. ADRs,
 runbooks, índices y planes no se importan.
 
 ## Reporte
@@ -65,6 +68,7 @@ runbooks, índices y planes no se importan.
 Importados, actualizados, sin cambios y con error, más cada caso con su
 ruta: números repetidos, importados antes que ya no tienen archivo, estados
 o prioridades desconocidos (van como Por hacer y `MEDIUM`), sin fecha, sin
-etiquetas, `id` distinto de la carpeta, descripción recortada y archivos
+etiquetas, `id` distinto de la carpeta, título, etiquetas o descripción
+recortados y archivos
 rotos (sin `issue.md`, sin frontmatter, YAML inválido, sin `id`). Un archivo
 roto no frena a los demás.

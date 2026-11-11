@@ -229,11 +229,29 @@ func AreaLabel(raw string) string {
 	} else if i := strings.IndexAny(s, "—("); i >= 0 {
 		s = s[:i]
 	}
-	s = strings.ToLower(strings.Trim(strings.TrimSpace(s), "`"))
+	return normalizeLabel(strings.Trim(strings.TrimSpace(s), "`"))
+}
+
+// normalizeLabel deja una etiqueta como la guarda Tekitla: en minúsculas,
+// sin espacios en los extremos y a LabelMaxLen runas como máximo.
+func normalizeLabel(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
 	if utf8.RuneCountInString(s) > LabelMaxLen {
 		s = string([]rune(s)[:LabelMaxLen])
 	}
 	return strings.TrimSpace(s)
+}
+
+// TitleMaxLen es el largo máximo de un título en Tekitla.
+const TitleMaxLen = 200
+
+// clampTitle recorta el título a TitleMaxLen runas (truncated = true si lo
+// recortó).
+func clampTitle(s string) (title string, truncated bool) {
+	if utf8.RuneCountInString(s) <= TitleMaxLen {
+		return s, false
+	}
+	return strings.TrimSpace(string([]rune(s)[:TitleMaxLen-1])) + "…", true
 }
 
 // DescriptionMaxLen es el largo máximo de una descripción en Tekitla.

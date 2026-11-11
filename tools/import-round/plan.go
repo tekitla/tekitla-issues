@@ -40,7 +40,8 @@ type Orphan struct {
 
 // MakePlan decide qué archivo se queda con cada número:
 //  1. el que ya está importado con ese número;
-//  2. si no, el primero por slug (comparación de bytes);
+//  2. si no, el primero que coincide con su carpeta (template-docs) y,
+//     entre esos, por slug (comparación de bytes);
 //  3. si el número ya es de un issue sin archivo (o creado en Tekitla),
 //     ninguno: todos quedan afuera y en el reporte.
 func MakePlan(docs []*Doc, existing Existing) Plan {
@@ -59,7 +60,14 @@ func MakePlan(docs []*Doc, existing Existing) Plan {
 	var plan Plan
 	for _, n := range numbers {
 		cands := append([]*Doc(nil), byNumber[n]...)
-		sort.Slice(cands, func(i, j int) bool { return cands[i].Slug < cands[j].Slug })
+		// Primero los que coinciden con su carpeta (template-docs: id ==
+		// número de la carpeta; Round siempre coincide), después por slug.
+		sort.Slice(cands, func(i, j int) bool {
+			if mi, mj := cands[i].FolderNumber != 0, cands[j].FolderNumber != 0; mi != mj {
+				return mj
+			}
+			return cands[i].Slug < cands[j].Slug
+		})
 		holder, taken := existing[n]
 
 		var winner *Doc
@@ -68,6 +76,7 @@ func MakePlan(docs []*Doc, existing Existing) Plan {
 			for _, c := range cands {
 				if holder != "" && c.SourceKey == holder {
 					winner = c
+					break
 				}
 			}
 		default:
