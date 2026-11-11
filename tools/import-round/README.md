@@ -72,3 +72,39 @@ etiquetas, `id` distinto de la carpeta, título, etiquetas o descripción
 recortados y archivos
 rotos (sin `issue.md`, sin frontmatter, YAML inválido, sin `id`). Un archivo
 roto no frena a los demás.
+
+## Histórico de Round (`-historico`, issue 036)
+
+Reconstruye las transiciones de estado de cada issue de Round desde git, para
+las métricas de flujo (lead time, cerrados por semana, WIP). Por ahora solo
+con `-dry-run`: el contrato de v0.5.0 no tiene cómo cargar un evento con su
+fecha y su fuente. Lo que falta está en las Notas del issue 036.
+
+```bash
+go run ./tools/import-round -historico -dry-run            # resumen y casos
+go run ./tools/import-round -historico -dry-run -detalle   # además, cada evento
+```
+
+- Un solo `git log -M --no-merges --name-status` de la carpeta, más
+  `git cat-file --batch` para leer cada versión. Los renombres se siguen con
+  la misma detección que `--follow`, y la clave es el nombre actual del
+  archivo. Solo entra el archivo que se queda con el número, según el mismo
+  plan de la importación.
+- **Alta:** `Fecha detectado` si es de un día anterior al primer commit; si
+  no, el primer commit.
+- **Transición:** cada commit en que cambia el valor del `Estado:` (su primer
+  token, como en la importación) es una transición con la fecha del commit
+  (committer). Cambiar solo el texto alrededor no cuenta. Un commit sin línea
+  `Estado:` se salta.
+- **Cierre del archivo (CU-036-2):** si el archivo nace cerrado, ningún commit
+  marca el cierre. Entonces su `Fecha resuelto` es la fecha del cierre, con
+  fuente «archivo», siempre que caiga entre el alta y el primer commit. Si un
+  commit cierra el issue, manda el commit.
+- **Idempotencia (CU-036-1):** cada evento tiene una clave estable:
+  `<clave>#alta`, `<clave>#<sha>` o `<clave>#archivo:resuelto`. Una segunda
+  corrida con lo ya cargado no deja nada pendiente.
+- **Reporte:** totales (eventos, de commits o del archivo, nuevos y ya
+  cargados), altas y cierres tomados del archivo, `Fecha detectado` posterior
+  al primer commit, `Fecha resuelto` sin usar y por qué, estados desconocidos
+  por commit, versiones ilegibles y números repetidos. Todo es «histórico
+  aproximado»: los estados se cambiaban a mano y a veces tarde.

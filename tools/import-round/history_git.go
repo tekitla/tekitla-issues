@@ -28,16 +28,28 @@ func gitRun(dir string, args ...string) ([]byte, error) {
 // commitMark separa los commits en la salida de git log.
 const commitMark = "\x1ecommit "
 
-// fileLog devuelve los commits que tocan file (en dir), del más viejo al
-// más nuevo, siguiendo renombres, con la ruta que tenía el archivo en cada
-// uno (relativa a la raíz del repo). Sin merges: el cambio cuenta en el
-// commit que lo hizo.
-func fileLog(dir, file string) ([]Version, error) {
-	out, err := gitRun(dir, "log", "--follow", "--no-merges", "--format="+commitMark+"%H %cI", "--name-only", "--", file)
+// folderLog devuelve, para cada archivo actual de files (nombres dentro de
+// dir), los commits que lo tocan, del más viejo al más nuevo, con la ruta
+// que tenía en cada uno (relativa a la raíz del repo). Un solo git log de
+// toda la carpeta, con detección de renombres (-M, la misma de --follow):
+// se recorre del commit más nuevo al más viejo y un renombre pasa la
+// identidad del archivo a su nombre anterior. Sin merges: el cambio cuenta
+// en el commit que lo hizo.
+func folderLog(dir string, files []string) (map[string][]Version, error) {
+	prefix, err := gitRun(dir, "rev-parse", "--show-prefix")
 	if err != nil {
 		return nil, err
 	}
-	var versions []Version
+	// alias: ruta (en el commit que se está leyendo) -> archivo actual.
+	alias := map[string]string{}
+	for _, f := range files {
+		alias[strings.TrimSpace(string(prefix))+f] = f
+	}
+	out, err := gitRun(dir, "log", "-M", "--no-merges", "--name-status", "--format="+commitMark+"%H %cI", "--", ".")
+	if err != nil {
+		return nil, err
+	}
+	versions := map[string][]Version{}
 	for _, chunk := range strings.Split(string(out), commitMark)[1:] {
 		lines := strings.Split(strings.TrimSpace(chunk), "\n")
 		head := strings.Fields(lines[0])
@@ -48,19 +60,38 @@ func fileLog(dir, file string) ([]Version, error) {
 		if err != nil {
 			return nil, fmt.Errorf("git log: fecha %q: %w", head[1], err)
 		}
-		v := Version{Commit: head[0], Date: date}
 		for _, l := range lines[1:] {
-			if l = strings.TrimSpace(l); l != "" {
-				v.Path = l
+			f := strings.Split(strings.TrimRight(l, "\r"), "\t")
+			if len(f) < 2 || f[0] == "" {
+				continue
+			}
+			p := f[len(f)-1]
+			file, ok := alias[p]
+			switch f[0][0] {
+			case 'D':
+				// Antes de borrarse, esa ruta era otro archivo.
+				delete(alias, p)
+				continue
+			case 'R':
+				if len(f) != 3 {
+					return nil, fmt.Errorf("git log: renombre inesperado %q", l)
+				}
+				delete(alias, p)
+				if ok {
+					alias[f[1]] = file
+				}
+			case 'A':
+				delete(alias, p)
+			}
+			if ok {
+				versions[file] = append(versions[file], Version{Commit: head[0], Date: date, Path: p})
 			}
 		}
-		if v.Path == "" {
-			return nil, fmt.Errorf("git log: el commit %s no trae la ruta de %s", short(v.Commit), file)
-		}
-		versions = append(versions, v)
 	}
-	for i, j := 0, len(versions)-1; i < j; i, j = i+1, j-1 {
-		versions[i], versions[j] = versions[j], versions[i]
+	for _, vs := range versions {
+		for i, j := 0, len(vs)-1; i < j; i, j = i+1, j-1 {
+			vs[i], vs[j] = vs[j], vs[i]
+		}
 	}
 	return versions, nil
 }
@@ -123,14 +154,9 @@ func (b *blobReader) Close() error {
 	return b.cmd.Wait()
 }
 
-// readVersions arma las versiones de doc (archivo en dir): la línea Estado
-// de cada commit, leída con ParseDoc como en la importación. Del contenido
-// solo se guarda el Estado.
-func readVersions(dir string, blobs *blobReader, doc *Doc) ([]Version, error) {
-	versions, err := fileLog(dir, doc.File)
-	if err != nil {
-		return nil, err
-	}
+// readStates completa la línea Estado de cada versión de doc, leída con
+// ParseDoc como en la importación. Del contenido solo se guarda el Estado.
+func readStates(blobs *blobReader, doc *Doc, versions []Version) []Version {
 	for i := range versions {
 		v := &versions[i]
 		content, err := blobs.read(v.Commit, v.Path)
@@ -147,5 +173,5 @@ func readVersions(dir string, blobs *blobReader, doc *Doc) ([]Version, error) {
 		}
 		v.RawState = old.RawState
 	}
-	return versions, nil
+	return versions
 }

@@ -29,18 +29,21 @@ func runHistory(o options, src *source, out io.Writer) error {
 	plan := MakePlan(docs, Existing{})
 	rep := &HistoryReport{Key: src.key, Total: len(docs), Broken: broken, Plan: plan, Detail: o.detail}
 
+	files := make([]string, len(plan.Import))
+	for i, d := range plan.Import {
+		files[i] = d.File
+	}
+	logs, err := folderLog(src.dir, files)
+	if err != nil {
+		return err
+	}
 	blobs, err := newBlobReader(src.dir)
 	if err != nil {
 		return err
 	}
 	defer blobs.Close()
 	for _, d := range plan.Import {
-		versions, err := readVersions(src.dir, blobs, d)
-		if err != nil {
-			rep.Failed = append(rep.Failed, Failure{Doc: d, Err: err.Error()})
-			continue
-		}
-		h := BuildHistory(d, versions)
+		h := BuildHistory(d, readStates(blobs, d, logs[d.File]))
 		h.Doc.Body = "" // del cuerpo no se usa nada más: no se guarda
 		rep.Histories = append(rep.Histories, h)
 	}
@@ -190,7 +193,7 @@ func (e HistoryEvent) describe() string {
 	if e.Source == SourceCommit {
 		src = "commit " + short(e.Commit)
 	}
-	date := e.Date.UTC().Format(time.DateOnly)
+	date := e.Date.Format(time.DateOnly)
 	if e.Kind == KindCreated {
 		return fmt.Sprintf("%s  alta  (%s)", date, src)
 	}

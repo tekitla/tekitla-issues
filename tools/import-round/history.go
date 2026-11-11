@@ -115,7 +115,7 @@ func BuildHistory(cur *Doc, versions []Version) History {
 
 	created := HistoryEvent{Key: key + "#alta", Kind: KindCreated, Date: first.Date, Source: SourceCommit, Commit: first.Commit}
 	if det, ok := ParseDate(cur.RawDate); ok {
-		if det.Before(first.Date) {
+		if dayBefore(det, first.Date) {
 			created.Date, created.Source, created.Commit = det, SourceFile, ""
 			h.CreatedFromFile = true
 		} else if dayAfter(det, first.Date) {
@@ -147,7 +147,7 @@ func BuildHistory(cur *Doc, versions []Version) History {
 				FromRaw: "open", ToRaw: v.RawState, From: issuesv1.IssueState_ISSUE_STATE_TODO, To: to}
 			if isClosed(to) && hasResolved && i == 0 {
 				switch {
-				case resolved.Before(created.Date):
+				case dayBefore(resolved, created.Date):
 					h.ResolvedIgnored = "anterior al alta"
 				case dayAfter(resolved, v.Date):
 					h.ResolvedIgnored = "posterior al commit que crea el archivo ya cerrado"
@@ -177,11 +177,15 @@ func BuildHistory(cur *Doc, versions []Version) History {
 	return h
 }
 
-// dayAfter: el día de d es posterior al día de ref (en UTC). Las fechas del
-// archivo no tienen hora: «Fecha detectado» del mismo día del commit no es
-// posterior.
+// dayBefore y dayAfter comparan por día: las fechas del archivo no tienen
+// hora, y una del mismo día que el commit no es ni anterior ni posterior.
+// Cada fecha cuenta en su zona (la del commit es la de quien lo hizo).
+func dayBefore(d, ref time.Time) bool {
+	return d.Format(time.DateOnly) < ref.Format(time.DateOnly)
+}
+
 func dayAfter(d, ref time.Time) bool {
-	return d.UTC().Format(time.DateOnly) > ref.UTC().Format(time.DateOnly)
+	return d.Format(time.DateOnly) > ref.Format(time.DateOnly)
 }
 
 func isClosed(s issuesv1.IssueState) bool {
