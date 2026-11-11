@@ -6,7 +6,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"google.golang.org/grpc/codes"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -103,7 +103,7 @@ func sendHistories(ctx context.Context, client issuesv1.IssueServiceClient, src 
 			switch {
 			case err == nil:
 				res.CreatedFixed = append(res.CreatedFixed, h.Doc)
-			case overwrite && status.Code(err) == codes.FailedPrecondition:
+			case overwrite && errorReason(err) == "IMPORT_EVENTS_BEFORE_CREATED":
 				// Una carga anterior dejó eventos antes del alta correcta: se
 				// reescriben primero y se vuelve a intentar.
 				retryFix = true
@@ -117,7 +117,7 @@ func sendHistories(ctx context.Context, client issuesv1.IssueServiceClient, src 
 		}
 		if retryFix {
 			if err := fixCreated(); err != nil {
-				fail(h.Doc, "ImportIssue (alta)", err)
+				fail(h.Doc, "ImportIssue (alta, después de reescribir los eventos)", err)
 				continue
 			}
 			res.CreatedFixed = append(res.CreatedFixed, h.Doc)
@@ -148,6 +148,17 @@ func sendEvents(ctx context.Context, client issuesv1.IssueServiceClient, t *targ
 	return true
 }
 
+// errorReason es la reason del ErrorInfo de un error del servicio ("" si
+// no trae).
+func errorReason(err error) string {
+	for _, d := range status.Convert(err).Details() {
+		if info, ok := d.(*errdetails.ErrorInfo); ok {
+			return info.GetReason()
+		}
+	}
+	return ""
+}
+
 // importedEvents traduce las transiciones de h (sin el alta) al contrato.
 // La source_ref es la clave del evento sin el prefijo del issue: el sha del
 // commit o "inicial".
@@ -161,12 +172,18 @@ func importedEvents(h History) []*issuesv1.ImportedEvent {
 		if e.Source == SourceFile {
 			src = issuesv1.EventSource_EVENT_SOURCE_IMPORT_FILE
 		}
+		from, to := stateValue(e.FromRaw), stateValue(e.ToRaw)
+		if from == to && e.From == e.To {
+			// Dos valores que solo difieren después de las 40 runas: para el
+			// contrato no es un cambio de estado.
+			continue
+		}
 		out = append(out, &issuesv1.ImportedEvent{
 			SourceRef:  strings.TrimPrefix(e.Key, h.Doc.SourceKey+"#"),
 			Source:     src,
 			OccurredAt: timestamppb.New(e.Date),
 			Change: &issuesv1.ImportedEvent_StatusChanged{StatusChanged: &issuesv1.ImportedStatusChange{
-				FromState: e.From, ToState: e.To, FromName: stateValue(e.FromRaw), ToName: stateValue(e.ToRaw),
+				FromState: e.From, ToState: e.To, FromName: from, ToName: to,
 			}},
 		})
 	}

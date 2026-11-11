@@ -20,10 +20,11 @@ set -euo pipefail
 # tocan, y la prueba en seco los muestra aparte. Los eventos que ya tienen
 # fuente (desde v0.6.0, o de ImportIssueEvents) tampoco. Requiere 000006.
 #
-# Además alinea la fecha del evento «creado» de esos issues importados con
-# su created_at: en v0.5 quedaba con la fecha de la corrida, y desde v0.6.0
-# el contrato dice que es el alta (así el historial empieza por el
-# «creado»). Es la única fecha que cambia; la prueba en seco la cuenta.
+# Además alinea con su created_at la fecha del evento «creado» (de
+# ImportIssue: sin fuente o import_sync) de los issues importados del
+# proyecto. En v0.5 quedaba con la fecha de la corrida, y desde v0.6.0 el
+# contrato dice que es el alta (así el historial empieza por el «creado»).
+# Es la única fecha que cambia; la prueba en seco la cuenta.
 #
 # Sin --apply (en QA y en prod) solo muestra qué cambiaría: el proyecto y
 # cuántos eventos por tipo, dentro de BEGIN ... ROLLBACK. Con --apply lo
@@ -108,6 +109,7 @@ WITH aligned AS (
     JOIN issues.projects p ON p.id = i.project_id
     JOIN issues.workspaces w ON w.id = p.workspace_id
    WHERE e.issue_id = i.id AND e.kind = 'created' AND e.created_at <> i.created_at
+     AND COALESCE(e.source, 'live') IN ('live', 'import_sync')
      AND w.owner_uid = :'owner' AND p.key = upper(:'key') AND i.source_key IS NOT NULL
   RETURNING e.id)
 SELECT count(*) AS altas_alineadas FROM aligned;

@@ -42,7 +42,7 @@ func (r *IssueRepository) ImportEvents(ctx context.Context, workspaceIDs []strin
 		// El «creado» de un issue importado antes de v0.6.0 tiene la fecha de
 		// la corrida: se alinea con el alta para que el historial empiece por
 		// él (el contrato lo fija así desde v0.6.0).
-		if err := alignCreatedEvent(tx, issue.ID, issue.CreatedAt); err != nil {
+		if _, err := alignCreatedEvent(tx, issue.ID, issue.CreatedAt); err != nil {
 			return err
 		}
 		refs := make([]string, len(events))
@@ -104,13 +104,7 @@ func overrideCreatedAt(tx *gorm.DB, cur *model.Issue, createdAt time.Time, detai
 	if at.Equal(cur.CreatedAt) {
 		// Mismo alta, pero el «creado» puede haber quedado con la fecha de
 		// una corrida de v0.5.
-		var n int64
-		err := tx.Raw(`SELECT count(*) FROM issues.issue_events WHERE issue_id = ? AND kind = 'created' AND created_at <> ?`, cur.ID, at).
-			Scan(&n).Error
-		if err != nil || n == 0 {
-			return false, err
-		}
-		return true, alignCreatedEvent(tx, cur.ID, at)
+		return alignCreatedEvent(tx, cur.ID, at)
 	}
 	var first []time.Time
 	err := tx.Raw(`SELECT min(created_at) FROM issues.issue_events
@@ -127,12 +121,16 @@ func overrideCreatedAt(tx *gorm.DB, cur *model.Issue, createdAt time.Time, detai
 	if err := tx.Model(&issueRow{}).Where("id = ?", cur.ID).Update("created_at", at).Error; err != nil {
 		return false, err
 	}
-	return true, alignCreatedEvent(tx, cur.ID, at)
+	if _, err := alignCreatedEvent(tx, cur.ID, at); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // alignCreatedEvent pone la fecha del evento «creado» del issue en at (su
-// created_at).
-func alignCreatedEvent(tx *gorm.DB, issueID string, at time.Time) error {
-	return tx.Exec(`UPDATE issues.issue_events SET created_at = ? WHERE issue_id = ? AND kind = 'created' AND created_at <> ?`,
-		at, issueID, at).Error
+// created_at). Devuelve si movió alguno.
+func alignCreatedEvent(tx *gorm.DB, issueID string, at time.Time) (bool, error) {
+	res := tx.Exec(`UPDATE issues.issue_events SET created_at = ? WHERE issue_id = ? AND kind = 'created' AND created_at <> ?`,
+		at, issueID, at)
+	return res.RowsAffected > 0, res.Error
 }

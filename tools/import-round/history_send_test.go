@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -46,7 +47,10 @@ func (f *historyFake) ImportIssue(_ context.Context, req *issuesv1.ImportIssueRe
 	// Como el servicio: el alta no puede quedar después de un evento importado.
 	for _, e := range f.events[req.GetSourceKey()] {
 		if e.GetOccurredAt().AsTime().Before(req.GetCreatedAt().AsTime()) {
-			return nil, status.Error(codes.FailedPrecondition, "IMPORT_EVENTS_BEFORE_CREATED")
+			// Como domainerrors.MapToGRPC: la reason va en un ErrorInfo.
+			st, _ := status.New(codes.FailedPrecondition, "created_at would be after an imported event").
+				WithDetails(&errdetails.ErrorInfo{Reason: "IMPORT_EVENTS_BEFORE_CREATED"})
+			return nil, st.Err()
 		}
 	}
 	f.overrides = append(f.overrides, req.GetSourceKey())
