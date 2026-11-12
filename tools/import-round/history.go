@@ -132,7 +132,7 @@ func BuildHistory(cur *Doc, versions []Version) History {
 	prevTok, prevRaw := "", ""
 	seenUnknown := map[string]bool{}
 	for _, v := range readable {
-		tok := leadingToken(v.RawState)
+		tok := stateToken(v.RawState)
 		if tok == "" {
 			continue
 		}

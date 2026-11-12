@@ -227,6 +227,43 @@ func (s memIssues) Import(_ context.Context, workspaceIDs []string, spec model.I
 	return it, model.ImportCreated, nil
 }
 
+// ImportEvents en memoria: idempotente por SourceRef (sin overwrite ni el
+// control de fechas, que cubre el repo de Postgres).
+func (s memIssues) ImportEvents(_ context.Context, workspaceIDs []string, projectID, sourceKey string, events []model.ImportedEvent, _ bool, author model.Author) (model.ImportEventsResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if p, ok := s.projects[projectID]; !ok || !slices.Contains(workspaceIDs, p.WorkspaceID) {
+		return model.ImportEventsResult{}, domainerrors.NotFoundError("project not found", nil)
+	}
+	var issue *model.Issue
+	for _, it := range s.issues {
+		if it.ProjectID == projectID && it.SourceKey == sourceKey {
+			issue = it
+		}
+	}
+	if issue == nil {
+		return model.ImportEventsResult{}, domainerrors.NotFoundError("issue not found", nil)
+	}
+	var res model.ImportEventsResult
+	for _, ev := range events {
+		dup := false
+		for _, e := range s.events {
+			if e.IssueID == issue.ID && e.SourceRef == ev.SourceRef {
+				dup = true
+			}
+		}
+		if dup {
+			res.Skipped++
+			continue
+		}
+		e := &model.IssueEvent{Kind: model.EventStatusChanged, Status: ev.Status, Source: ev.Source, SourceRef: ev.SourceRef}
+		s.addEvent(issue.ID, author, e)
+		e.CreatedAt = ev.OccurredAt
+		res.Created++
+	}
+	return res, nil
+}
+
 // asAgent es asUser con el x-agent-id que pone el gateway con un token de
 // agente.
 func asAgent(t *testing.T, uid, agentID string) context.Context {
@@ -548,4 +585,78 @@ func TestIssueHandler_ImportIssue(t *testing.T) {
 	wantCode(t, "someone else's project", err, codes.NotFound)
 	_, err = c.issues.ImportIssue(asAgent(t, "u1", "00000000-0000-4000-8000-000000000001"), req)
 	wantCode(t, "import by an agent", err, codes.PermissionDenied)
+}
+
+// ImportIssueEvents (issue 036): eventos con fecha y fuente, idempotente
+// por source_ref, solo para una persona; ListIssueEvents trae la fuente.
+func TestIssueHandler_ImportIssueEvents(t *testing.T) {
+	c := newClients(t)
+	u1 := asUser(t, "u1")
+	project, err := c.issues.CreateProject(u1, &issuesv1.CreateProjectRequest{Key: "RND", Name: "Round"})
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	pid := project.GetProject().GetId()
+	if _, err := c.issues.ImportIssue(u1, &issuesv1.ImportIssueRequest{
+		ProjectId: pid, SourceKey: "007-cola", Number: 7, Title: "Cola", State: issuesv1.IssueState_ISSUE_STATE_DONE,
+		CreatedAt: timestamppb.New(time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)),
+	}); err != nil {
+		t.Fatalf("ImportIssue: %v", err)
+	}
+	ev := func(ref string, src issuesv1.EventSource, at time.Time, from, to issuesv1.IssueState) *issuesv1.ImportedEvent {
+		return &issuesv1.ImportedEvent{SourceRef: ref, Source: src, OccurredAt: timestamppb.New(at),
+			Change: &issuesv1.ImportedEvent_StatusChanged{StatusChanged: &issuesv1.ImportedStatusChange{
+				FromState: from, ToState: to, FromName: "open", ToName: "resolved",
+			}}}
+	}
+	req := &issuesv1.ImportIssueEventsRequest{ProjectId: pid, SourceKey: "007-cola", Events: []*issuesv1.ImportedEvent{
+		ev("abc123", issuesv1.EventSource_EVENT_SOURCE_IMPORT_HISTORY, time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC),
+			issuesv1.IssueState_ISSUE_STATE_TODO, issuesv1.IssueState_ISSUE_STATE_IN_PROGRESS),
+		ev("inicial", issuesv1.EventSource_EVENT_SOURCE_IMPORT_FILE, time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC),
+			issuesv1.IssueState_ISSUE_STATE_IN_PROGRESS, issuesv1.IssueState_ISSUE_STATE_DONE),
+	}}
+	res, err := c.issues.ImportIssueEvents(u1, req)
+	if err != nil || res.GetCreated() != 2 || res.GetSkipped() != 0 {
+		t.Fatalf("ImportIssueEvents: %+v %v", res, err)
+	}
+	// Segunda corrida: no agrega nada (CU-036-1).
+	res, err = c.issues.ImportIssueEvents(u1, req)
+	if err != nil || res.GetCreated() != 0 || res.GetSkipped() != 2 {
+		t.Errorf("ImportIssueEvents again: %+v %v", res, err)
+	}
+	events, err := c.issues.ListIssueEvents(u1, &issuesv1.ListIssueEventsRequest{ProjectId: pid, Number: 7})
+	if err != nil {
+		t.Fatalf("ListIssueEvents: %v", err)
+	}
+	var sources []issuesv1.EventSource
+	var refs []string
+	for _, e := range events.GetEvents() {
+		sources = append(sources, e.GetSource())
+		refs = append(refs, e.GetSourceRef())
+	}
+	if !slices.Equal(refs, []string{"", "abc123", "inicial"}) || sources[1] != issuesv1.EventSource_EVENT_SOURCE_IMPORT_HISTORY ||
+		sources[2] != issuesv1.EventSource_EVENT_SOURCE_IMPORT_FILE {
+		t.Errorf("events: refs %v sources %v", refs, sources)
+	}
+	if sc := events.GetEvents()[2].GetStatusChanged(); sc.GetToState() != issuesv1.IssueState_ISSUE_STATE_DONE || sc.GetToStatusId() != "" || sc.GetToStatusName() != "resolved" {
+		t.Errorf("imported status change: %+v", sc)
+	}
+
+	// Un agente no importa; un issue sin esa clave es NOT_FOUND; un evento
+	// sin cambio o con fuente LIVE es INVALID_ARGUMENT.
+	a1 := createAgent(t, c, "u1", "A1")
+	_, err = c.issues.ImportIssueEvents(asAgent(t, "u1", a1.GetId()), req)
+	wantCode(t, "agent", err, codes.PermissionDenied)
+	_, err = c.issues.ImportIssueEvents(u1, &issuesv1.ImportIssueEventsRequest{ProjectId: pid, SourceKey: "999-otro", Events: req.GetEvents()})
+	wantCode(t, "unknown source key", err, codes.NotFound)
+	bad := proto.Clone(req).(*issuesv1.ImportIssueEventsRequest)
+	bad.Events[0].Change = nil
+	_, err = c.issues.ImportIssueEvents(u1, bad)
+	wantCode(t, "no change", err, codes.InvalidArgument)
+	bad = proto.Clone(req).(*issuesv1.ImportIssueEventsRequest)
+	bad.Events[0].Source = issuesv1.EventSource_EVENT_SOURCE_LIVE
+	_, err = c.issues.ImportIssueEvents(u1, bad)
+	wantCode(t, "live source", err, codes.InvalidArgument)
+	_, err = c.issues.ImportIssueEvents(asUser(t, "u2"), req)
+	wantCode(t, "foreign project", err, codes.NotFound)
 }

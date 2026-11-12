@@ -43,6 +43,33 @@ const (
 	EventAssigneeChanged EventKind = "assignee_changed"
 )
 
+// EventSource es de dónde sale un evento del historial (issue 036). El
+// string es el que se guarda en issues.issue_events.source; "" (NULL en la
+// base) es LIVE: los eventos anteriores a la columna.
+type EventSource string
+
+// Fuentes de un evento.
+const (
+	EventSourceLive EventSource = "live"
+	// EventSourceImportHistory: reconstruido del historial del origen (un
+	// commit), con ImportIssueEvents.
+	EventSourceImportHistory EventSource = "import_history"
+	// EventSourceImportFile: una fecha escrita en el archivo de origen que
+	// ningún commit marca, con ImportIssueEvents.
+	EventSourceImportFile EventSource = "import_file"
+	// EventSourceImportSync: registrado por ImportIssue al reflejar el
+	// origen (la fecha es la de la corrida).
+	EventSourceImportSync EventSource = "import_sync"
+)
+
+// OrLive devuelve la fuente, o LIVE si no tiene (eventos anteriores).
+func (s EventSource) OrLive() EventSource {
+	if s == "" {
+		return EventSourceLive
+	}
+	return s
+}
+
 // IssueEvent es un cambio en un issue, para su historial. Según Kind, viene
 // lleno uno de Status, Title, Priority, Labels o Comment (Created y
 // DescriptionChanged no tienen detalle). Discarded y Restored usan Status
@@ -67,6 +94,10 @@ type IssueEvent struct {
 	Comment   *Comment
 	Assignee  *AssigneeChange
 	CreatedAt time.Time
+	// Source es de dónde sale ("" = LIVE); SourceRef, su referencia en el
+	// origen si vino de ImportIssueEvents.
+	Source    EventSource
+	SourceRef string
 }
 
 // AssigneeChange es el asignado antes y después (vacío = sin asignar), con

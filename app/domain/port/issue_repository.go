@@ -102,7 +102,8 @@ type IssueRepository interface {
 	// AddComment guarda el comentario (ID, AuthorUID y Body ya seteados) en
 	// el issue y su evento.
 	AddComment(ctx context.Context, projectID string, number int32, comment *model.Comment, author model.Author) (*model.Comment, error)
-	// ListEvents pagina el historial del issue, del más viejo al más nuevo.
+	// ListEvents pagina el historial del issue, del más viejo al más nuevo
+	// por (created_at, orden de registro).
 	ListEvents(ctx context.Context, projectID string, number int32, page PageFilter) (*EventPage, error)
 	// Import crea o actualiza el issue de spec.SourceKey (ver
 	// model.ImportSpec) con el lock del proyecto, que tiene que ser de uno de
@@ -110,6 +111,15 @@ type IssueRepository interface {
 	// ISSUE_NUMBER_TAKEN) si el número ya es de otro issue; next_issue_number
 	// queda mayor que el número importado. Al actualizar: FailedPrecondition
 	// (reason IMPORT_NUMBER_MISMATCH) si el número no coincide. Cada cambio
-	// registra su evento como en los RPC sueltos.
+	// registra su evento como en los RPC sueltos, con fuente IMPORT_SYNC.
+	// Con spec.OverrideCreatedAt corrige el alta de un issue existente:
+	// FailedPrecondition (reason IMPORT_EVENTS_BEFORE_CREATED) si quedaría
+	// después de un evento importado con ImportEvents.
 	Import(ctx context.Context, workspaceIDs []string, spec model.ImportSpec, author model.Author) (*model.Issue, model.ImportOutcome, error)
+	// ImportEvents agrega al historial del issue de sourceKey (NotFound si
+	// no hay) los eventos ya validados, con el lock del issue. Un evento
+	// cuya SourceRef ya está en el issue se omite, o se reescribe con
+	// overwrite. Un evento anterior al alta del issue: Validation (field
+	// occurred_at), sin escribir nada.
+	ImportEvents(ctx context.Context, workspaceIDs []string, projectID, sourceKey string, events []model.ImportedEvent, overwrite bool, author model.Author) (model.ImportEventsResult, error)
 }

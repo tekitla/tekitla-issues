@@ -163,16 +163,27 @@ func leadingToken(raw string) string {
 	return strings.ToLower(strings.Trim(strings.TrimSpace(s), "`*_.,;:()"))
 }
 
-// MapState mapea el Estado de Round (§4 del issue 025). known = false si el
-// valor no está en la tabla o falta: va como TODO y al reporte.
+// stateToken es el valor del Estado: leadingToken sin lo que no es letra al
+// principio (p. ej. «✅ `resuelto y verificado`» → «resuelto y verificado»).
+func stateToken(raw string) string {
+	raw = strings.TrimLeftFunc(raw, func(r rune) bool { return !unicode.IsLetter(r) && r != '`' && r != '*' })
+	return leadingToken(raw)
+}
+
+// MapState mapea el Estado de Round (§4 del issue 025, y los valores que
+// sumó Victor el 2026-11-11 en el 036: abierto, in-review, front arreglado
+// y resuelto con cualquier aclaración). known = false si el valor no está
+// en la tabla o falta: va como TODO y al reporte. Se ignora lo que no es
+// letra al principio (p. ej. «✅ `resuelto y verificado`»).
 func MapState(raw string) (state issuesv1.IssueState, known bool) {
-	v := leadingToken(raw)
+	v := stateToken(raw)
 	switch {
-	case v == "open" || v == "pending-validation":
+	case v == "open" || v == "pending-validation" || v == "abierto":
 		return issuesv1.IssueState_ISSUE_STATE_TODO, true
-	case v == "in-progress" || v == "parcial" || v == "blocked" || strings.HasPrefix(v, "partial"):
+	case v == "in-progress" || v == "parcial" || v == "blocked" || strings.HasPrefix(v, "partial") ||
+		v == "in-review" || v == "front arreglado":
 		return issuesv1.IssueState_ISSUE_STATE_IN_PROGRESS, true
-	case v == "resolved" || v == "resuelto" || v == "done" || v == "closed" || strings.HasPrefix(v, "delivered"):
+	case v == "resolved" || strings.HasPrefix(v, "resuelto") || v == "done" || v == "closed" || strings.HasPrefix(v, "delivered"):
 		return issuesv1.IssueState_ISSUE_STATE_DONE, true
 	case v == "won't-do" || v == "won’t-do" || v == "superseded":
 		return issuesv1.IssueState_ISSUE_STATE_CANCELED, true

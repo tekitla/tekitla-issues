@@ -261,6 +261,8 @@ func (h *IssueHandler) ImportIssue(ctx context.Context, req *issuesv1.ImportIssu
 		Priority:    mapper.PriorityFromProto(req.GetPriority()),
 		State:       mapper.IssueStateFromProto(req.GetState()),
 		LabelNames:  req.GetLabelNames(),
+
+		OverrideCreatedAt: req.GetOverrideCreatedAt(),
 	}
 	if req.CreatedAt != nil {
 		if err := req.GetCreatedAt().CheckValid(); err != nil {
@@ -273,4 +275,27 @@ func (h *IssueHandler) ImportIssue(ctx context.Context, req *issuesv1.ImportIssu
 		return nil, domainerrors.MapToGRPC(err, h.logger)
 	}
 	return &issuesv1.ImportIssueResponse{Issue: mapper.IssueToProto(issue), Outcome: mapper.ImportOutcomeToProto(outcome)}, nil
+}
+
+// ImportIssueEvents agrega al historial de un issue importado eventos con su
+// fecha en el origen (issue 036). Solo para quien importa, como ImportIssue.
+func (h *IssueHandler) ImportIssueEvents(ctx context.Context, req *issuesv1.ImportIssueEventsRequest) (*issuesv1.ImportIssueEventsResponse, error) {
+	uid, err := requirePerson(ctx)
+	if err != nil {
+		return nil, domainerrors.MapToGRPC(err, h.logger)
+	}
+	in := application.ImportIssueEventsInput{
+		ProjectID: req.GetProjectId(),
+		SourceKey: req.GetSourceKey(),
+		Events:    make([]model.ImportedEvent, len(req.GetEvents())),
+		Overwrite: req.GetOverwrite(),
+	}
+	for i, e := range req.GetEvents() {
+		in.Events[i] = mapper.ImportedEventFromProto(e)
+	}
+	res, err := h.issueSvc.ImportIssueEvents(ctx, model.Author{UserID: uid}, in)
+	if err != nil {
+		return nil, domainerrors.MapToGRPC(err, h.logger)
+	}
+	return &issuesv1.ImportIssueEventsResponse{Created: int32(res.Created), Skipped: int32(res.Skipped), Updated: int32(res.Updated)}, nil
 }

@@ -1,7 +1,7 @@
 package main
 
 import (
-	"errors"
+	"context"
 	"fmt"
 	"io"
 	"strings"
@@ -10,21 +10,35 @@ import (
 	issuesv1 "github.com/tekitla/tekitla-protos/gen/go/issues/v1"
 )
 
-// errHistoryNeedsContract: el histórico todavía no se puede cargar. El
-// contrato (protos v0.5.0) no tiene un RPC para eventos con fecha y fuente;
-// lo que haría falta está en las Notas del issue 036.
-var errHistoryNeedsContract = errors.New("el histórico todavía no se puede cargar (falta el contrato: ver las Notas del issue 036); corre con -dry-run")
-
-// runHistory reconstruye el histórico de los issues de src y lo reporta
-// (issue 036, parte 1). Por ahora solo con -dry-run. La copia ya pasó por
-// checkGit (salvo -skip-git-check).
-func runHistory(o options, src *source, out io.Writer) error {
+// runHistory reconstruye el histórico de los issues de src, lo carga con
+// ImportIssueEvents (salvo -dry-run) y lo reporta (issue 036, parte 1). La
+// copia ya pasó por checkGit (salvo -skip-git-check).
+func runHistory(ctx context.Context, o options, src *source, out io.Writer) error {
 	docs, broken, err := src.read()
 	if err != nil {
 		return err
 	}
-	plan := MakePlan(docs, Existing{})
-	rep := &HistoryReport{Key: src.key, Total: len(docs), Broken: broken, Plan: plan, Detail: o.detail}
+	var (
+		client issuesv1.IssueServiceClient
+		target *target
+	)
+	existing := Existing{}
+	if !o.dryRun {
+		var closeConn func()
+		ctx, client, closeConn, err = connect(ctx, o)
+		if err != nil {
+			return err
+		}
+		defer closeConn()
+		if target, err = loadTarget(ctx, client, src); err != nil {
+			return err
+		}
+		existing = target.existing()
+	}
+	// El mismo plan de la importación: solo entra el archivo que se queda con
+	// el número.
+	plan := MakePlan(docs, existing)
+	rep := &HistoryReport{Key: src.key, Total: len(docs), Broken: broken, Plan: plan, Detail: o.detail, DryRun: o.dryRun}
 
 	files := make([]string, len(plan.Import))
 	for i, d := range plan.Import {
@@ -41,13 +55,18 @@ func runHistory(o options, src *source, out io.Writer) error {
 	defer blobs.Close() // por si algo corta antes; el Close de abajo manda
 	for _, d := range plan.Import {
 		h := BuildHistory(d, readStates(blobs, d, logs[d.File]))
-		h.Doc.Body = "" // del cuerpo no se usa nada más: no se guarda
+		if o.dryRun {
+			h.Doc.Body = "" // solo la carga lo usa (para corregir el alta)
+		}
 		rep.Histories = append(rep.Histories, h)
 	}
 	// Si cat-file murió o se desfasó, el histórico no es confiable: error,
-	// sin reporte.
+	// sin reporte ni carga.
 	if err := blobs.Close(); err != nil {
 		return err
+	}
+	if !o.dryRun {
+		rep.Sent = sendHistories(ctx, client, src, target, rep.Histories, o.overwrite)
 	}
 	rep.Write(out)
 	return nil
@@ -62,13 +81,19 @@ type HistoryReport struct {
 	Histories []History
 	// Detail: listar cada evento.
 	Detail bool
+	DryRun bool
+	// Sent es lo que pasó al cargar (nil en dry-run).
+	Sent *SendResult
 }
 
-// Write imprime el reporte, con el formato de import-round. Por ahora
-// siempre es de un dry-run: falta el contrato para cargar.
+// Write imprime el reporte, con el formato de import-round.
 func (r *HistoryReport) Write(w io.Writer) {
 	p := func(format string, args ...any) { fmt.Fprintf(w, format+"\n", args...) }
-	p("== import-round -historico (dry-run: no se llamó al servicio)")
+	if r.DryRun {
+		p("== import-round -historico (dry-run: no se llamó al servicio)")
+	} else {
+		p("== import-round -historico")
+	}
 	var events, status, category, fromCommit, fromFile int
 	var noGit, createdFile, detectedLate, closedFile, resolvedIgnored, unknown, unreadable []History
 	for _, h := range r.Histories {
@@ -103,6 +128,10 @@ func (r *HistoryReport) Write(w io.Writer) {
 		r.Total, len(r.Histories)-len(noGit), countLosers(r.Plan.Duplicates), len(r.Broken))
 	p("Eventos: %d (altas: %d · cambios de Estado: %d, %d con cambio de categoría) · de commits: %d · del archivo: %d",
 		events, events-status, status, category, fromCommit, fromFile)
+	if s := r.Sent; s != nil {
+		p("Cargados: %d · ya estaban: %d · reescritos: %d · altas corregidas: %d · sin importar en Tekitla: %d · con error: %d",
+			s.Created, s.Skipped, s.Updated, len(s.CreatedFixed), len(s.NotImported), len(s.Failed))
+	}
 	p("Confianza: histórico aproximado (los estados se cambiaban a mano y a veces tarde)")
 
 	section := func(title string, n int) bool {
@@ -169,6 +198,23 @@ func (r *HistoryReport) Write(w io.Writer) {
 			}
 		}
 	}
+	if s := r.Sent; s != nil {
+		if section("Alta corregida (override_created_at)", len(s.CreatedFixed)) {
+			for _, d := range s.CreatedFixed {
+				p("  %s-%d  %s", r.Key, d.Number, d.Path)
+			}
+		}
+		if section("Sin importar en Tekitla (corre import-round antes; no se carga su histórico)", len(s.NotImported)) {
+			for _, d := range s.NotImported {
+				p("  %s-%d  %s", r.Key, d.Number, d.Path)
+			}
+		}
+		if section("Con error al cargar", len(s.Failed)) {
+			for _, f := range s.Failed {
+				p("  %s-%d  %s: %s", r.Key, f.Doc.Number, f.Doc.Path, f.Err)
+			}
+		}
+	}
 	if section("Archivos rotos", len(r.Broken)) {
 		for _, f := range r.Broken {
 			p("  %s: %s", f.Doc.Path, f.Err)
@@ -186,7 +232,7 @@ func (e HistoryEvent) describe() string {
 	if e.Kind == KindCreated {
 		return fmt.Sprintf("%s  alta  (%s)", date, src)
 	}
-	return fmt.Sprintf("%s  %s → %s  [%s → %s]  (%s)", date, stateName(e.From), stateName(e.To), leadingToken(e.FromRaw), leadingToken(e.ToRaw), src)
+	return fmt.Sprintf("%s  %s → %s  [%s → %s]  (%s)", date, stateName(e.From), stateName(e.To), stateToken(e.FromRaw), stateToken(e.ToRaw), src)
 }
 
 func (h History) firstCommitDate() string {

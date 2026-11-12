@@ -69,6 +69,13 @@ func (r *IssueRepository) Import(ctx context.Context, workspaceIDs []string, spe
 		if err != nil {
 			return err
 		}
+		if spec.OverrideCreatedAt {
+			moved, err := overrideCreatedAt(tx, cur, spec.CreatedAt, details)
+			if err != nil {
+				return err
+			}
+			changed = changed || moved
+		}
 		outcome = model.ImportUnchanged
 		if changed {
 			outcome = model.ImportUpdated
@@ -130,7 +137,9 @@ func importCreate(tx *gorm.DB, spec model.ImportSpec, statuses []*model.Status, 
 	if err != nil {
 		return nil, err
 	}
-	if err := insertEvent(tx, row.ID, author, &model.IssueEvent{Kind: model.EventCreated}, now); err != nil {
+	// El alta va con la fecha del origen (v0.6.0): el historial importado
+	// después no queda antes del «creado».
+	if err := insertEvent(tx, row.ID, author, &model.IssueEvent{Kind: model.EventCreated, Source: model.EventSourceImportSync}, createdAt); err != nil {
 		return nil, err
 	}
 	issue := fromIssueRow(row)
@@ -180,6 +189,7 @@ func importUpdate(tx *gorm.DB, cur *model.Issue, spec model.ImportSpec, statuses
 		}
 	}
 	for _, ev := range events {
+		ev.Source = model.EventSourceImportSync
 		if err := insertEvent(tx, cur.ID, author, ev, now); err != nil {
 			return false, err
 		}
@@ -260,7 +270,7 @@ func syncImportedLabels(tx *gorm.DB, issue *model.Issue, names []string, author 
 			return false, err
 		}
 	}
-	return true, insertEvent(tx, issue.ID, author, &model.IssueEvent{Kind: model.EventLabelsChanged, Labels: change}, now)
+	return true, insertEvent(tx, issue.ID, author, &model.IssueEvent{Kind: model.EventLabelsChanged, Labels: change, Source: model.EventSourceImportSync}, now)
 }
 
 // ensureLabels devuelve las etiquetas del proyecto con esos nombres (sin

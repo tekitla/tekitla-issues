@@ -77,6 +77,14 @@ type mockIssueRepo struct {
 	discardFn     func(ctx context.Context, projectID string, number int32, statusID, reason string, author model.Author) (*model.Issue, error)
 	restoreFn     func(ctx context.Context, projectID string, number int32, author model.Author) (*model.Issue, error)
 	importFn      func(ctx context.Context, workspaceIDs []string, spec model.ImportSpec, author model.Author) (*model.Issue, model.ImportOutcome, error)
+	importEvtsFn  func(ctx context.Context, workspaceIDs []string, projectID, sourceKey string, events []model.ImportedEvent, overwrite bool, author model.Author) (model.ImportEventsResult, error)
+}
+
+func (m *mockIssueRepo) ImportEvents(ctx context.Context, workspaceIDs []string, projectID, sourceKey string, events []model.ImportedEvent, overwrite bool, author model.Author) (model.ImportEventsResult, error) {
+	if m.importEvtsFn == nil {
+		return model.ImportEventsResult{}, nil
+	}
+	return m.importEvtsFn(ctx, workspaceIDs, projectID, sourceKey, events, overwrite, author)
 }
 
 func (m *mockIssueRepo) Import(ctx context.Context, workspaceIDs []string, spec model.ImportSpec, author model.Author) (*model.Issue, model.ImportOutcome, error) {

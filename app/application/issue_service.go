@@ -125,6 +125,18 @@ type ImportIssueInput struct {
 	Priority    model.Priority
 	State       model.IssueState
 	LabelNames  []string
+	// OverrideCreatedAt corrige el alta de un issue existente con CreatedAt
+	// (issue 036); sin CreatedAt es inválido.
+	OverrideCreatedAt bool
+}
+
+// ImportIssueEventsInput son los datos que acepta ImportIssueEvents (issue
+// 036).
+type ImportIssueEventsInput struct {
+	ProjectID string
+	SourceKey string
+	Events    []model.ImportedEvent
+	Overwrite bool
 }
 
 // ListIssues devuelve una página de issues del proyecto con la búsqueda,
@@ -437,7 +449,10 @@ func (s *IssueService) ImportIssue(ctx context.Context, who model.Author, in Imp
 	if err != nil {
 		return nil, "", err
 	}
-	spec := model.ImportSpec{ProjectID: in.ProjectID, Number: in.Number, CreatedAt: in.CreatedAt, State: in.State}
+	spec := model.ImportSpec{ProjectID: in.ProjectID, Number: in.Number, CreatedAt: in.CreatedAt, State: in.State, OverrideCreatedAt: in.OverrideCreatedAt}
+	if in.OverrideCreatedAt && in.CreatedAt.IsZero() {
+		return nil, "", domainerrors.ValidationError("override_created_at needs created_at", map[string]any{"field": "created_at"})
+	}
 	if spec.SourceKey, err = model.NormalizeSourceKey(in.SourceKey); err != nil {
 		return nil, "", err
 	}
@@ -472,6 +487,25 @@ func (s *IssueService) ImportIssue(ctx context.Context, who model.Author, in Imp
 		return nil, "", domainerrors.ValidationError("created_at must not be in the future", map[string]any{"field": "created_at"})
 	}
 	return s.issues.Import(ctx, workspaceIDs, spec, who)
+}
+
+// ImportIssueEvents agrega al historial de un issue importado eventos con
+// su fecha en el origen (issue 036). Idempotente por SourceRef: lo que ya
+// está se omite, o se reescribe con Overwrite.
+func (s *IssueService) ImportIssueEvents(ctx context.Context, who model.Author, in ImportIssueEventsInput) (model.ImportEventsResult, error) {
+	workspaceIDs, err := s.guard.ensureAuthor(ctx, who, in.ProjectID)
+	if err != nil {
+		return model.ImportEventsResult{}, err
+	}
+	sourceKey, err := model.NormalizeSourceKey(in.SourceKey)
+	if err != nil {
+		return model.ImportEventsResult{}, err
+	}
+	events, err := model.NormalizeImportedEvents(in.Events, s.now())
+	if err != nil {
+		return model.ImportEventsResult{}, err
+	}
+	return s.issues.ImportEvents(ctx, workspaceIDs, in.ProjectID, sourceKey, events, in.Overwrite, who)
 }
 
 // projectLabelIDs valida que las etiquetas sean del proyecto y quita repetidos.
