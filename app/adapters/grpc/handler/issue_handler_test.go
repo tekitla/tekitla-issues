@@ -213,7 +213,10 @@ func newClients(t *testing.T) clients {
 		application.NewIssueService(workspaces, projects, issues, statuses, labels, actors),
 		application.NewStatusService(workspaces, projects, statuses, actors),
 		application.NewLabelService(workspaces, projects, labels),
-		application.NewFlowService(workspaces, projects, labels, memFlow{store}),
+		// Reloj un minuto adelante: con el de Windows (~1 ms) el «ahora» puede
+		// ser igual a la fecha de los eventos recién creados, y to es exclusivo.
+		application.NewFlowService(workspaces, projects, labels, memFlow{store}).
+			WithClock(func() time.Time { return time.Now().UTC().Add(time.Minute) }),
 	)
 
 	lis := bufconn.Listen(1 << 20)

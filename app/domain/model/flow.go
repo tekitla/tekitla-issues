@@ -237,7 +237,7 @@ func timeline(is *FlowIssue) []stateEntry {
 		}
 	}
 	initial := is.State
-	if len(accepted) > 0 {
+	if len(accepted) > 0 && accepted[0].From.IsValid() {
 		initial = accepted[0].From
 	}
 	out := []stateEntry{{At: is.CreatedAt, State: initial, Source: createdSrc}}
@@ -303,9 +303,8 @@ func firstEntry(entries []stateEntry, state IssueState) (stateEntry, bool) {
 // lastActivity es el último evento antes de t que cuenta como actividad:
 // el alta, cualquier evento que no sea import_sync, y las transiciones
 // import_sync que cuentan.
-func lastActivity(is *FlowIssue, t time.Time) time.Time {
+func lastActivity(is *FlowIssue, t time.Time, hasDated bool, lastDated time.Time) time.Time {
 	last := is.CreatedAt
-	hasDated, lastDated := datedHorizon(is)
 	for _, ev := range is.Events {
 		if !ev.At.Before(t) {
 			continue
@@ -343,6 +342,7 @@ func ComputeFlowMetrics(issues []FlowIssue, q FlowQuery) FlowMetrics {
 		}
 		res.Issues++
 		entries := timeline(is)
+		start, hasStart := firstEntry(entries, IssueStateInProgress)
 		isValue := len(value) == 0 || slices.ContainsFunc(is.LabelIDs, func(id string) bool { return value[id] })
 
 		for i, b := range bounds {
@@ -352,6 +352,11 @@ func ComputeFlowMetrics(issues []FlowIssue, q FlowQuery) FlowMetrics {
 				continue
 			}
 			end := before[len(before)-1]
+			started := hasStart && start.At.Before(b[1])
+			// Cada transición suma una vez a la fuente de la semana, aunque
+			// sostenga dos números (la entrada a en curso: cycle time y
+			// empezados).
+			countedStart := false
 			// Terminado o descartado esta semana: la última entrada antes del
 			// fin de la semana es a esa categoría, con fecha y dentro de ella.
 			if end.Dated && !end.At.Before(b[0]) {
@@ -364,9 +369,10 @@ func ComputeFlowMetrics(issues []FlowIssue, q FlowQuery) FlowMetrics {
 					}
 					w.Source.add(end.Source)
 					leads[i] = append(leads[i], end.At.Sub(is.CreatedAt))
-					if start, ok := firstEntry(before, IssueStateInProgress); ok {
+					if started {
 						cycles[i] = append(cycles[i], end.At.Sub(start.At))
 						w.Source.add(start.Source)
+						countedStart = true
 					}
 				case IssueStateCanceled:
 					w.Canceled++
@@ -376,9 +382,11 @@ func ComputeFlowMetrics(issues []FlowIssue, q FlowQuery) FlowMetrics {
 			if end.State == IssueStateInProgress {
 				w.WIP++
 			}
-			if start, ok := firstEntry(before, IssueStateInProgress); ok && !start.At.Before(b[0]) {
+			if started && !start.At.Before(b[0]) {
 				w.Started++
-				w.Source.add(start.Source)
+				if !countedStart {
+					w.Source.add(start.Source)
+				}
 			}
 		}
 
@@ -391,7 +399,8 @@ func ComputeFlowMetrics(issues []FlowIssue, q FlowQuery) FlowMetrics {
 			}
 		case IssueStateInProgress:
 			res.Summary.WIP++
-			last := lastActivity(is, q.To)
+			hasDated, lastDated := datedHorizon(is)
+			last := lastActivity(is, q.To, hasDated, lastDated)
 			if atTo.At.After(last) {
 				last = atTo.At
 			}

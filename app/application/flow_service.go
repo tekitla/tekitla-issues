@@ -99,9 +99,12 @@ func (s *FlowService) flowQuery(in FlowMetricsInput) (model.FlowQuery, string, e
 	}
 	q.Location = loc
 
+	// Un to futuro se toma como ahora: el WIP y los estancados de un instante
+	// que no pasó no existen.
+	now := s.now()
 	q.To = in.To
-	if q.To.IsZero() {
-		q.To = s.now()
+	if q.To.IsZero() || q.To.After(now) {
+		q.To = now
 	}
 	q.From = in.From
 	if q.From.IsZero() {
@@ -118,7 +121,7 @@ func (s *FlowService) flowQuery(in FlowMetricsInput) (model.FlowQuery, string, e
 	case d == 0:
 		q.StaleDays = model.FlowDefaultStaleDays
 	case d < 1 || d > model.FlowMaxStaleDays:
-		return q, "", domainerrors.ValidationError("stale_after_days must be between 1 and 365", map[string]any{"field": "stale_after_days", "value": d})
+		return q, "", domainerrors.ValidationError("stale_after_days must be between 1 and 365", map[string]any{"field": "stale_after_days", "value": d}).WithReason("INVALID_STALE_AFTER_DAYS")
 	default:
 		q.StaleDays = int(d)
 	}
@@ -126,7 +129,7 @@ func (s *FlowService) flowQuery(in FlowMetricsInput) (model.FlowQuery, string, e
 	case n == 0:
 		q.StaleMax = model.FlowDefaultStaleMax
 	case n < 1 || n > model.FlowMaxStaleMax:
-		return q, "", domainerrors.ValidationError("stale_limit must be between 1 and 100", map[string]any{"field": "stale_limit", "value": n})
+		return q, "", domainerrors.ValidationError("stale_limit must be between 1 and 100", map[string]any{"field": "stale_limit", "value": n}).WithReason("INVALID_STALE_LIMIT")
 	default:
 		q.StaleMax = int(n)
 	}
@@ -144,7 +147,7 @@ func projectLabelIDs(labels []*model.Label, ids []string) ([]string, error) {
 	var out []string
 	for _, id := range ids {
 		if !known[id] {
-			return nil, domainerrors.ValidationError("label_ids must be labels of the project", map[string]any{"field": "label_ids", "value": id})
+			return nil, domainerrors.ValidationError("label_ids must be labels of the project", map[string]any{"field": "label_ids", "value": id}).WithReason("UNKNOWN_LABEL")
 		}
 		if !seen[id] {
 			seen[id] = true

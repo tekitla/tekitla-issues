@@ -50,6 +50,13 @@ func (h *IssueHandler) GetFlowMetrics(ctx context.Context, req *issuesv1.GetFlow
 	if err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)
 	}
+	// Un Timestamp fuera de rango no se normaliza a otra fecha: se rechaza.
+	if req.From != nil && req.GetFrom().CheckValid() != nil {
+		return nil, domainerrors.MapToGRPC(domainerrors.ValidationError("invalid from", map[string]any{"field": "from"}).WithReason("INVALID_PERIOD"), h.logger)
+	}
+	if req.To != nil && req.GetTo().CheckValid() != nil {
+		return nil, domainerrors.MapToGRPC(domainerrors.ValidationError("invalid to", map[string]any{"field": "to"}).WithReason("INVALID_PERIOD"), h.logger)
+	}
 	res, err := h.flowSvc.GetFlowMetrics(ctx, uid, mapper.FlowMetricsInputFromProto(req))
 	if err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)

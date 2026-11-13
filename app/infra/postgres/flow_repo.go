@@ -32,12 +32,17 @@ func (r *FlowRepository) ListFlowIssues(ctx context.Context, projectID string, l
 	details := map[string]any{"project_id": projectID}
 	db := r.db.WithContext(ctx)
 
-	q := db.Table("issues.issues AS i").
-		Select("i.id, i.number, i.title, i.status_id, i.state, i.created_at").
-		Where("i.project_id = ?", projectID)
-	if len(labelIDs) > 0 {
-		q = q.Where("EXISTS (SELECT 1 FROM issues.issue_labels il WHERE il.issue_id = i.id AND il.label_id IN ?)", labelIDs)
+	// Con labelIDs, las tres consultas se limitan a los issues que tienen
+	// alguna (mismo filtro), así no se leen eventos que después se descartan.
+	scope := func(q *gorm.DB) *gorm.DB {
+		q = q.Where("i.project_id = ?", projectID)
+		if len(labelIDs) > 0 {
+			q = q.Where("EXISTS (SELECT 1 FROM issues.issue_labels f WHERE f.issue_id = i.id AND f.label_id IN ?)", labelIDs)
+		}
+		return q
 	}
+	q := scope(db.Table("issues.issues AS i").
+		Select("i.id, i.number, i.title, i.status_id, i.state, i.created_at"))
 	var rows []struct {
 		ID        string
 		Number    int32
@@ -66,12 +71,10 @@ func (r *FlowRepository) ListFlowIssues(ctx context.Context, projectID string, l
 		IssueID string
 		LabelID string
 	}
-	err := db.Raw(
-		`SELECT il.issue_id, il.label_id
-		   FROM issues.issue_labels il
-		   JOIN issues.issues i ON i.id = il.issue_id
-		  WHERE i.project_id = ?`, projectID,
-	).Scan(&pairs).Error
+	err := scope(db.Table("issues.issue_labels AS il").
+		Select("il.issue_id, il.label_id").
+		Joins("JOIN issues.issues i ON i.id = il.issue_id")).
+		Scan(&pairs).Error
 	if err != nil {
 		return nil, translateError(err, "flow", "list labels", details)
 	}
@@ -90,13 +93,11 @@ func (r *FlowRepository) ListFlowIssues(ctx context.Context, projectID string, l
 		CreatedAt time.Time
 		Source    *string
 	}
-	err = db.Raw(
-		`SELECT e.issue_id, e.kind, CASE WHEN e.kind IN ? THEN e.data END AS data, e.created_at, e.source
-		   FROM issues.issue_events e
-		   JOIN issues.issues i ON i.id = e.issue_id
-		  WHERE i.project_id = ?
-		  ORDER BY e.issue_id, e.created_at, e.seq`, transitionKinds, projectID,
-	).Scan(&evs).Error
+	err = scope(db.Table("issues.issue_events AS e").
+		Select("e.issue_id, e.kind, CASE WHEN e.kind IN ? THEN e.data END AS data, e.created_at, e.source", transitionKinds).
+		Joins("JOIN issues.issues i ON i.id = e.issue_id")).
+		Order("e.issue_id, e.created_at, e.seq").
+		Scan(&evs).Error
 	if err != nil {
 		return nil, translateError(err, "flow", "list events", details)
 	}

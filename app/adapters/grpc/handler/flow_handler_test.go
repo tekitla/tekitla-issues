@@ -97,10 +97,10 @@ func TestIssueHandler_GetFlowMetrics(t *testing.T) {
 		}
 	}
 
-	// to explícito: con el reloj de Windows (~1 ms) el «ahora» del servicio
-	// puede ser igual a la fecha de los eventos, y to es exclusivo.
-	to := timestamppb.New(time.Now().Add(time.Minute))
-	res, err := client.GetFlowMetrics(ctx, &issuesv1.GetFlowMetricsRequest{ProjectId: pid, TimeZone: "UTC", To: to})
+	// Un to futuro se toma como ahora (el reloj del servicio va un minuto
+	// adelante, ver newClients).
+	future := timestamppb.New(time.Now().Add(24 * time.Hour))
+	res, err := client.GetFlowMetrics(ctx, &issuesv1.GetFlowMetricsRequest{ProjectId: pid, TimeZone: "UTC", To: future})
 	if err != nil {
 		t.Fatalf("GetFlowMetrics: %v", err)
 	}
@@ -120,6 +120,9 @@ func TestIssueHandler_GetFlowMetrics(t *testing.T) {
 	if got := res.GetValueLabelIds(); len(got) != 1 || got[0] != feature.GetLabel().GetId() {
 		t.Errorf("etiquetas de valor = %v", got)
 	}
+	if res.GetTo().AsTime().After(time.Now().Add(2 * time.Minute)) {
+		t.Errorf("to = %v, quiero ahora (un to futuro se recorta)", res.GetTo().AsTime())
+	}
 	if res.GetTimeZone() != "UTC" || res.GetCoverage().GetIssues() != 3 || res.GetStaleTotal() != 0 {
 		t.Errorf("respuesta = zona %q, cobertura %+v, estancados %d", res.GetTimeZone(), res.GetCoverage(), res.GetStaleTotal())
 	}
@@ -131,7 +134,7 @@ func TestIssueHandler_GetFlowMetrics(t *testing.T) {
 	}
 
 	// Filtro por etiqueta.
-	res, err = client.GetFlowMetrics(ctx, &issuesv1.GetFlowMetricsRequest{ProjectId: pid, To: to, LabelIds: []string{feature.GetLabel().GetId()}})
+	res, err = client.GetFlowMetrics(ctx, &issuesv1.GetFlowMetricsRequest{ProjectId: pid, LabelIds: []string{feature.GetLabel().GetId()}})
 	if err != nil || res.GetCoverage().GetIssues() != 1 || res.GetSummary().GetClosedValue() != 1 {
 		t.Errorf("con filtro: %v %+v", err, res.GetCoverage())
 	}
@@ -149,9 +152,10 @@ func TestIssueHandler_GetFlowMetrics(t *testing.T) {
 		{"zona desconocida", &issuesv1.GetFlowMetricsRequest{ProjectId: pid, TimeZone: "Marte/Olympus"}, "INVALID_TIME_ZONE"},
 		{"from después de to", &issuesv1.GetFlowMetricsRequest{ProjectId: pid, From: timestamppb.New(ts("2026-06-10")), To: timestamppb.New(ts("2026-06-01"))}, "INVALID_PERIOD"},
 		{"más de 104 semanas", &issuesv1.GetFlowMetricsRequest{ProjectId: pid, From: timestamppb.New(ts("2023-01-01")), To: timestamppb.New(ts("2026-06-01"))}, "PERIOD_TOO_LONG"},
-		{"etiqueta ajena", &issuesv1.GetFlowMetricsRequest{ProjectId: pid, LabelIds: []string{"no-es-del-proyecto"}}, "INVALID_ARGUMENT"},
-		{"stale_after_days fuera de rango", &issuesv1.GetFlowMetricsRequest{ProjectId: pid, StaleAfterDays: 400}, "INVALID_ARGUMENT"},
-		{"stale_limit fuera de rango", &issuesv1.GetFlowMetricsRequest{ProjectId: pid, StaleLimit: 101}, "INVALID_ARGUMENT"},
+		{"etiqueta ajena", &issuesv1.GetFlowMetricsRequest{ProjectId: pid, LabelIds: []string{"no-es-del-proyecto"}}, "UNKNOWN_LABEL"},
+		{"stale_after_days fuera de rango", &issuesv1.GetFlowMetricsRequest{ProjectId: pid, StaleAfterDays: 400}, "INVALID_STALE_AFTER_DAYS"},
+		{"stale_limit fuera de rango", &issuesv1.GetFlowMetricsRequest{ProjectId: pid, StaleLimit: 101}, "INVALID_STALE_LIMIT"},
+		{"timestamp fuera de rango", &issuesv1.GetFlowMetricsRequest{ProjectId: pid, To: &timestamppb.Timestamp{Seconds: 1, Nanos: 2e9}}, "INVALID_PERIOD"},
 	} {
 		_, err := client.GetFlowMetrics(ctx, c.req)
 		wantCode(t, c.what, err, codes.InvalidArgument)

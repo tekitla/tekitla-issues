@@ -124,3 +124,15 @@ func TestGetFlowMetrics_Errors(t *testing.T) {
 		t.Errorf("error de etiquetas: got %v", err)
 	}
 }
+
+// Un to futuro se toma como ahora.
+func TestGetFlowMetrics_FutureTo(t *testing.T) {
+	in := application.FlowMetricsInput{ProjectID: validID, To: flowNow.AddDate(0, 0, 60)}
+	res, err := newFlowService(&mockFlowRepo{}).GetFlowMetrics(context.Background(), owner, in)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.To.Equal(flowNow) {
+		t.Errorf("to = %v, quiero ahora (%v)", res.To, flowNow)
+	}
+}

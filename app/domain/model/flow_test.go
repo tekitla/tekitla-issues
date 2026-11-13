@@ -360,3 +360,32 @@ func TestComputeFlowMetrics_mismaFecha(t *testing.T) {
 		t.Errorf("semana = %+v, quiero 1 cerrado, 1 empezado y cycle time 0", w)
 	}
 }
+
+// Un evento con la categoría de origen vacía (datos viejos o rotos) no deja
+// la línea de tiempo sin categoría: se usa la actual.
+func TestComputeFlowMetrics_origenInvalido(t *testing.T) {
+	issues := []FlowIssue{{
+		Number: 1, State: doing, CreatedAt: ts("2026-06-01T10:00:00Z"),
+		Events: []FlowEvent{move("2026-06-02T10:00:00Z", live, "", "")},
+	}}
+	m := ComputeFlowMetrics(issues, query("2026-06-01T00:00:00Z", "2026-06-08T00:00:00Z"))
+	if m.Summary.WIP != 1 {
+		t.Errorf("WIP = %d, quiero 1 (la categoría actual)", m.Summary.WIP)
+	}
+}
+
+// La entrada a en curso sostiene el cycle time y «empezados», pero suma una
+// sola vez a la fuente de la semana.
+func TestComputeFlowMetrics_fuenteSinDuplicar(t *testing.T) {
+	issues := []FlowIssue{{
+		Number: 1, State: done, CreatedAt: ts("2026-06-01T10:00:00Z"),
+		Events: []FlowEvent{
+			move("2026-06-02T10:00:00Z", hist, todo, doing),
+			move("2026-06-03T10:00:00Z", live, doing, done),
+		},
+	}}
+	w := ComputeFlowMetrics(issues, query("2026-06-01T00:00:00Z", "2026-06-08T00:00:00Z")).Weeks[0]
+	if w.Source != (MetricSource{Live: 1, ImportHistory: 1}) || w.Started != 1 || w.CycleTime.Count != 1 {
+		t.Errorf("semana = %+v, quiero una transición de cada fuente", w)
+	}
+}

@@ -101,8 +101,11 @@ Reglas de negocio no obvias:
     2026-11-13). En DONE desde el alta sin transición: `done_without_dates`.
   - Semanas de lunes 00:00 en `time_zone` (por defecto
     `America/Mexico_City`; `time/tzdata` embebido en `cli/main.go`).
-    Período por defecto 12 semanas, máximo 104 (`INVALID_PERIOD`,
-    `PERIOD_TOO_LONG`, `INVALID_TIME_ZONE`).
+    Período por defecto 12 semanas, máximo 104; un `to` futuro se toma como
+    ahora. Reasons: `INVALID_PERIOD` (también un Timestamp fuera de rango),
+    `PERIOD_TOO_LONG`, `INVALID_TIME_ZONE`, `UNKNOWN_LABEL`,
+    `INVALID_STALE_AFTER_DAYS` e `INVALID_STALE_LIMIT`. Con `label_ids`, las
+    tres consultas se limitan a esos issues.
   - Estancados: en IN_PROGRESS en `to` sin actividad hace
     `stale_after_days` (30); los `import_sync` que no cuentan como transición
     no son actividad (el backfill dejó los de RND con la fecha de la corrida).
