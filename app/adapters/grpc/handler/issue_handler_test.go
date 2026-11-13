@@ -213,6 +213,7 @@ func newClients(t *testing.T) clients {
 		application.NewIssueService(workspaces, projects, issues, statuses, labels, actors),
 		application.NewStatusService(workspaces, projects, statuses, actors),
 		application.NewLabelService(workspaces, projects, labels),
+		application.NewFlowService(workspaces, projects, labels, memFlow{store}),
 	)
 
 	lis := bufconn.Listen(1 << 20)

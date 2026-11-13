@@ -15,7 +15,7 @@ repo docs).
   (`gen/go/issues/v1`): proyectos, issues (`ListIssues`, `GetIssue`,
   `CreateIssue`, `MoveIssue`, `UpdateIssue`, `DiscardIssue`, `RestoreIssue`),
   estados (con `BatchUpdateStatuses`), etiquetas, `CreateComment`,
-  `ListIssueEvents`, `ImportIssue` e `ImportIssueEvents`; `issues.v1.ActorService` (agentes y
+  `ListIssueEvents`, `ImportIssue`, `ImportIssueEvents` y `GetFlowMetrics`; `issues.v1.ActorService` (agentes y
   tokens) e `issues.v1.TokenAuthService` (`ResolveToken`, interno). Los
   comentarios del `.proto` son la especificación.
 - **Quién lo llama**: solo el `tekitla-gateway` (api-gateway), que autentica y
@@ -82,6 +82,32 @@ Reglas de negocio no obvias:
   anteriores a `000006`). Todo evento nuevo lleva su fuente explícita.
 - Etiquetas: máximo 100 por proyecto y 20 por issue; nombre único sin
   mayúsculas (`LABEL_NAME_TAKEN`); borrar una la quita de los issues sin evento.
+  `value` (036, `000007`): la etiqueta cuenta como valor en las métricas de
+  flujo; la ponen `CreateLabel`/`UpdateLabel`, el importador no la toca.
+- `GetFlowMetrics` (036): el cálculo es puro (`model.ComputeFlowMetrics`,
+  `model/flow.go`) sobre lo que lee `FlowRepository.ListFlowIssues` (tres
+  consultas por proyecto, en memoria). Reglas (el comentario de
+  `flow_metrics.proto` es la especificación):
+  - Línea de tiempo por issue con los cambios de categoría en orden
+    `(created_at, seq)`; solo cuenta el destino, y una transición a la
+    categoría actual no hace nada. `import_sync` cuenta solo si es posterior
+    al último evento `import_history`/`import_file` del issue (o si no tiene
+    ninguno). La categoría inicial es el origen de la primera transición; sin
+    transiciones, la actual. Dos entradas con la misma fecha van por orden.
+  - Terminado: la última entrada a DONE de la semana, si sigue en DONE al
+    final. Lead time: del alta a esa entrada; cycle time: de la primera
+    entrada a IN_PROGRESS. Sobre todo lo hecho; las etiquetas de valor solo
+    separan `closed_value` de `closed_other` (decisión de Victor,
+    2026-11-13). En DONE desde el alta sin transición: `done_without_dates`.
+  - Semanas de lunes 00:00 en `time_zone` (por defecto
+    `America/Mexico_City`; `time/tzdata` embebido en `cli/main.go`).
+    Período por defecto 12 semanas, máximo 104 (`INVALID_PERIOD`,
+    `PERIOD_TOO_LONG`, `INVALID_TIME_ZONE`).
+  - Estancados: en IN_PROGRESS en `to` sin actividad hace
+    `stale_after_days` (30); los `import_sync` que no cuentan como transición
+    no son actividad (el backfill dejó los de RND con la fecha de la corrida).
+  - Confianza: `RECORDED` si todo es en vivo, `APPROXIMATE` si algo es
+    importado.
 - Actores (025): una persona por uid (`issues.actors.user_uid` único), creada
   la primera vez que hace falta (`ActorRepository.EnsurePerson`, `ON CONFLICT
   DO NOTHING`); su `display_name` es vacío (el servicio no conoce nombres).
@@ -275,7 +301,9 @@ compose, ver `cli/healthcheck.go`) y reflection fuera de prod.
   `agent_id` y `imported`; solo columnas nullable salvo `imported`, con
   `DEFAULT false`, que es lo que son todas las etiquetas existentes) y
   `000006` las del 036 (`source` y `source_ref` en `issue_events`, sin
-  DEFAULT, e índice `(issue_id, created_at, seq)`). Marcar `import_sync` los
+  DEFAULT, e índice `(issue_id, created_at, seq)`) y `000007` la del 036
+  parte 2 (`labels.value`, `NOT NULL DEFAULT false`: ninguna etiqueta
+  existente es de valor). Marcar `import_sync` los
   eventos viejos de ImportIssue de un proyecto espejo (y alinear su
   «creado» con el alta) es aparte y revisable:
   `scripts/backfill_import_sync.sh <qa|prod> <uid> <clave> [--apply]` (sin
@@ -292,7 +320,7 @@ make up / make down           # Postgres 16 + servicio con docker compose
 docker compose up -d --wait postgres   # solo la base, para `make run`
 make run                      # levanta el servicio (lee .env.dev)
 make test                     # go test ./... -count=1
-make test-migrations          # migraciones + backfill contra un Postgres descartable
+make test-migrations          # migraciones + backfill contra un Postgres descartable (Git Bash: MSYS_NO_PATHCONV=1)
 make lint                     # gofmt + go vet (+ golangci-lint si está)
 make vuln                     # govulncheck (también corre en el CI)
 make build                    # bin/issues-service
@@ -335,7 +363,9 @@ git tag prod-v0.1.0 && git push origin prod-v0.1.0   # prod, automático salvo m
   tráfico de por medio. `000005` sí es compatible con el binario de v0.4: se
   puede aplicar antes del deploy. `000006` es compatible con el binario de
   v0.5 y **tiene que** aplicarse antes del deploy de la imagen que la usa
-  (escribe `source`).
+  (escribe `source`). `000007` es compatible con el binario de v0.4 (el
+  DEFAULT cubre sus INSERT) y también va antes del deploy (la imagen nueva
+  lee `labels.value`).
 - Release con cambios en `migrations/`: la guarda de prod bloquea. Aplicar el
   SQL por túnel SSH (`scripts/apply_migration.sh prod <migración> --apply`) y
   lanzar el override.
@@ -347,7 +377,8 @@ git tag prod-v0.1.0 && git push origin prod-v0.1.0   # prod, automático salvo m
 
 ## Protos
 
-Repo de protos: `github.com/tekitla/tekitla-protos`, hoy en `v0.6.1`
+Repo de protos: `github.com/tekitla/tekitla-protos`, hoy en `v0.6.1` (el 036
+parte 2 necesita `v0.7.0`)
 (`go.mod`). Paquete Go `github.com/tekitla/tekitla-protos/gen/go/issues/v1`
 (alias `issuesv1`), usado solo en `handler/`, `mapper/` y `cli/main.go`.
 

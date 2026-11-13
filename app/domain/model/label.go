@@ -36,8 +36,10 @@ type Label struct {
 	ID        string
 	ProjectID string
 	// Name es único en el proyecto sin distinguir mayúsculas.
-	Name      string
-	Color     LabelColor
+	Name  string
+	Color LabelColor
+	// Value: cuenta como valor en las métricas de flujo (issue 036).
+	Value     bool
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }

@@ -20,6 +20,7 @@ type labelRow struct {
 	ProjectID string    `gorm:"column:project_id;type:uuid;not null"`
 	Name      string    `gorm:"column:name;not null"`
 	Color     int       `gorm:"column:color;not null"`
+	Value     bool      `gorm:"column:value;not null"`
 	CreatedAt time.Time `gorm:"column:created_at"`
 	UpdatedAt time.Time `gorm:"column:updated_at"`
 }
@@ -78,14 +79,17 @@ func (r *LabelRepository) Create(ctx context.Context, label *model.Label) (*mode
 	return fromLabelRow(row), nil
 }
 
-// Update cambia nombre y/o color.
-func (r *LabelRepository) Update(ctx context.Context, projectID, id string, name *string, color *model.LabelColor) (*model.Label, error) {
+// Update cambia lo que trae patch.
+func (r *LabelRepository) Update(ctx context.Context, projectID, id string, patch port.LabelPatch) (*model.Label, error) {
 	updates := map[string]any{"updated_at": dbNow()}
-	if name != nil {
-		updates["name"] = *name
+	if patch.Name != nil {
+		updates["name"] = *patch.Name
 	}
-	if color != nil {
-		updates["color"] = int(*color)
+	if patch.Color != nil {
+		updates["color"] = int(*patch.Color)
+	}
+	if patch.Value != nil {
+		updates["value"] = *patch.Value
 	}
 	var rows []labelRow
 	res := r.db.WithContext(ctx).Model(&rows).Clauses(clause.Returning{}).
@@ -134,6 +138,7 @@ func toLabelRow(m *model.Label) *labelRow {
 		ProjectID: m.ProjectID,
 		Name:      m.Name,
 		Color:     int(m.Color),
+		Value:     m.Value,
 		CreatedAt: m.CreatedAt,
 		UpdatedAt: m.UpdatedAt,
 	}
@@ -145,6 +150,7 @@ func fromLabelRow(r *labelRow) *model.Label {
 		ProjectID: r.ProjectID,
 		Name:      r.Name,
 		Color:     model.LabelColor(r.Color),
+		Value:     r.Value,
 		CreatedAt: r.CreatedAt,
 		UpdatedAt: r.UpdatedAt,
 	}

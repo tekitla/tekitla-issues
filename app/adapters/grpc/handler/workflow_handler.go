@@ -175,7 +175,7 @@ func (h *IssueHandler) CreateLabel(ctx context.Context, req *issuesv1.CreateLabe
 	if err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)
 	}
-	label, err := h.labelSvc.CreateLabel(ctx, uid, req.GetProjectId(), req.GetName(), mapper.LabelColorFromProto(req.GetColor()))
+	label, err := h.labelSvc.CreateLabel(ctx, uid, req.GetProjectId(), req.GetName(), mapper.LabelColorFromProto(req.GetColor()), req.GetValue())
 	if err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)
 	}
@@ -192,7 +192,7 @@ func (h *IssueHandler) UpdateLabel(ctx context.Context, req *issuesv1.UpdateLabe
 		c := mapper.LabelColorFromProto(req.GetColor())
 		color = &c
 	}
-	label, err := h.labelSvc.UpdateLabel(ctx, uid, req.GetProjectId(), req.GetLabelId(), req.Name, color)
+	label, err := h.labelSvc.UpdateLabel(ctx, uid, req.GetProjectId(), req.GetLabelId(), req.Name, color, req.Value)
 	if err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)
 	}

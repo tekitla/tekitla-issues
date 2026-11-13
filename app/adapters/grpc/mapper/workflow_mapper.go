@@ -94,6 +94,7 @@ func LabelToProto(m *model.Label) *issuesv1.Label {
 		ProjectId: m.ProjectID,
 		Name:      m.Name,
 		Color:     LabelColorToProto(m.Color),
+		Value:     m.Value,
 	}
 }
 

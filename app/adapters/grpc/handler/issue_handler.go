@@ -27,6 +27,7 @@ type IssueHandler struct {
 	issueSvc   *application.IssueService
 	statusSvc  *application.StatusService
 	labelSvc   *application.LabelService
+	flowSvc    *application.FlowService
 }
 
 var _ issuesv1.IssueServiceServer = (*IssueHandler)(nil)
@@ -38,8 +39,22 @@ func NewIssueHandler(
 	issueSvc *application.IssueService,
 	statusSvc *application.StatusService,
 	labelSvc *application.LabelService,
+	flowSvc *application.FlowService,
 ) *IssueHandler {
-	return &IssueHandler{logger: logger, projectSvc: projectSvc, issueSvc: issueSvc, statusSvc: statusSvc, labelSvc: labelSvc}
+	return &IssueHandler{logger: logger, projectSvc: projectSvc, issueSvc: issueSvc, statusSvc: statusSvc, labelSvc: labelSvc, flowSvc: flowSvc}
+}
+
+// GetFlowMetrics: métricas de flujo del proyecto (issue 036).
+func (h *IssueHandler) GetFlowMetrics(ctx context.Context, req *issuesv1.GetFlowMetricsRequest) (*issuesv1.GetFlowMetricsResponse, error) {
+	uid, err := requireUserID(ctx)
+	if err != nil {
+		return nil, domainerrors.MapToGRPC(err, h.logger)
+	}
+	res, err := h.flowSvc.GetFlowMetrics(ctx, uid, mapper.FlowMetricsInputFromProto(req))
+	if err != nil {
+		return nil, domainerrors.MapToGRPC(err, h.logger)
+	}
+	return mapper.FlowMetricsToProto(res), nil
 }
 
 func (h *IssueHandler) ListProjects(ctx context.Context, req *issuesv1.ListProjectsRequest) (*issuesv1.ListProjectsResponse, error) {

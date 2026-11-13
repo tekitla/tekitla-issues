@@ -257,16 +257,19 @@ func (s memLabels) Create(_ context.Context, l *model.Label) (*model.Label, erro
 	return l, nil
 }
 
-func (s memLabels) Update(_ context.Context, _, id string, name *string, color *model.LabelColor) (*model.Label, error) {
+func (s memLabels) Update(_ context.Context, _, id string, patch port.LabelPatch) (*model.Label, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, l := range s.labels {
 		if l.ID == id {
-			if name != nil {
-				l.Name = *name
+			if patch.Name != nil {
+				l.Name = *patch.Name
 			}
-			if color != nil {
-				l.Color = *color
+			if patch.Color != nil {
+				l.Color = *patch.Color
+			}
+			if patch.Value != nil {
+				l.Value = *patch.Value
 			}
 			return l, nil
 		}
