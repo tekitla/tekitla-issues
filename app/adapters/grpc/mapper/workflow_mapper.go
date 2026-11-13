@@ -90,10 +90,11 @@ func LabelToProto(m *model.Label) *issuesv1.Label {
 		return nil
 	}
 	return &issuesv1.Label{
-		Id:        m.ID,
-		ProjectId: m.ProjectID,
-		Name:      m.Name,
-		Color:     LabelColorToProto(m.Color),
+		Id:            m.ID,
+		ProjectId:     m.ProjectID,
+		Name:          m.Name,
+		Color:         LabelColorToProto(m.Color),
+		CountsAsValue: m.CountsAsValue,
 	}
 }
 

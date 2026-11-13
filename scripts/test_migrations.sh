@@ -4,7 +4,7 @@
 # =============================================================================
 # Aplica migrations/*.up.sql en orden y, antes de cada migración con backfill,
 # carga datos de la versión anterior para verificar que el backfill los deja
-# bien. Al final prueba down -> up de cada una que lo pide (hoy 000005 y 000006). No toca ninguna base real:
+# bien. Al final prueba down -> up de cada una que lo pide (hoy 000005, 000006 y 000007). No toca ninguna base real:
 # levanta un contenedor propio y lo borra al terminar.
 #
 #   scripts/test_migrations.sh        (o `make test-migrations`)
@@ -239,6 +239,22 @@ check "down: vuelve el índice de 000003" "1" "SELECT count(*) FROM pg_indexes W
 
 apply 000006_event_source.up
 check "up de nuevo: todo sin fuente" "0" "SELECT count(source) FROM issues.issue_events"
+
+LABELS_BEFORE_7="$(sql "SELECT count(*) FROM issues.labels")"
+apply 000007_label_counts_as_value.up
+echo "== 000007: ninguna etiqueta existente pasa a ser de valor"
+check "etiquetas existentes sin valor" "$LABELS_BEFORE_7|0" "SELECT count(*), count(*) FILTER (WHERE counts_as_value) FROM issues.labels"
+must_fail "counts_as_value NULL" "UPDATE issues.labels SET counts_as_value = NULL"
+sql "UPDATE issues.labels SET counts_as_value = true WHERE id = (SELECT id FROM issues.labels ORDER BY id LIMIT 1)"
+echo "ok   una etiqueta marcada de valor"
+
+apply 000007_label_counts_as_value.down
+check "down: sin la columna counts_as_value" "0" "SELECT count(*) FROM information_schema.columns
+  WHERE table_schema = 'issues' AND table_name = 'labels' AND column_name = 'counts_as_value'"
+check "down: las etiquetas se conservan" "$LABELS_BEFORE_7" "SELECT count(*) FROM issues.labels"
+
+apply 000007_label_counts_as_value.up
+check "up de nuevo: ninguna de valor" "0" "SELECT count(*) FILTER (WHERE counts_as_value) FROM issues.labels"
 
 if [ "$fails" -ne 0 ]; then echo "Migraciones: con fallas"; exit 1; fi
 echo "Migraciones: todo ok"

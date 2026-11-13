@@ -53,6 +53,14 @@ func (p StatusPatch) IsEmpty() bool {
 	return p.Name == nil && p.AfterID == nil && p.Color == nil && p.WIPLimit == nil && p.Hidden == nil
 }
 
+// LabelPatch son los cambios de una etiqueta, ya validados (nil = no
+// cambia).
+type LabelPatch struct {
+	Name          *string
+	Color         *model.LabelColor
+	CountsAsValue *bool
+}
+
 // LabelRepository define la persistencia de Label.
 //
 // Contrato de errores:
@@ -65,8 +73,8 @@ type LabelRepository interface {
 	List(ctx context.Context, projectID string) ([]*model.Label, error)
 	// Create inserta la etiqueta (ID, ProjectID, Name y Color seteados).
 	Create(ctx context.Context, label *model.Label) (*model.Label, error)
-	// Update cambia nombre y/o color (nil = no cambia).
-	Update(ctx context.Context, projectID, id string, name *string, color *model.LabelColor) (*model.Label, error)
+	// Update cambia lo que trae patch (nil = no cambia).
+	Update(ctx context.Context, projectID, id string, patch LabelPatch) (*model.Label, error)
 	// Delete borra la etiqueta y la quita de todos los issues.
 	Delete(ctx context.Context, projectID, id string) error
 }
