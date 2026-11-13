@@ -189,9 +189,11 @@ func FlowWeekBounds(from, to time.Time, loc *time.Location) [][2]time.Time {
 	f := from.In(loc)
 	// Lunes de la semana de from (Weekday: domingo = 0).
 	back := (int(f.Weekday()) + 6) % 7
-	ws := time.Date(f.Year(), f.Month(), f.Day()-back, 0, 0, 0, 0, loc)
+	monday := time.Date(f.Year(), f.Month(), f.Day()-back, 12, 0, 0, 0, time.UTC)
+	ws := dayStart(monday, loc)
 	for ws.Before(to) {
-		we := time.Date(ws.Year(), ws.Month(), ws.Day()+7, 0, 0, 0, 0, loc)
+		monday = monday.AddDate(0, 0, 7)
+		we := dayStart(monday, loc)
 		s, e := ws, we
 		if s.Before(from) {
 			s = from
@@ -203,6 +205,20 @@ func FlowWeekBounds(from, to time.Time, loc *time.Location) [][2]time.Time {
 		ws = we
 	}
 	return out
+}
+
+// dayStart es el primer instante del día de date (su año, mes y día) en
+// loc: las 00:00, o la primera hora que existe si el cambio de horario se
+// las salta. time.Date no garantiza adónde lleva una hora que no existe
+// (puede dar la del día anterior): se avanza de a 15 minutos hasta caer en
+// el día.
+func dayStart(date time.Time, loc *time.Location) time.Time {
+	want := date.Format(time.DateOnly)
+	d := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, loc)
+	for d.In(loc).Format(time.DateOnly) < want {
+		d = d.Add(15 * time.Minute)
+	}
+	return d
 }
 
 // stateEntry es la entrada de un issue a una categoría. Dated: viene de una

@@ -389,3 +389,23 @@ func TestComputeFlowMetrics_fuenteSinDuplicar(t *testing.T) {
 		t.Errorf("semana = %+v, quiero una transición de cada fuente", w)
 	}
 }
+
+// Un día sin 00:00 (cambio de horario a medianoche) empieza en la primera
+// hora que existe, no en la del día anterior; las semanas siguen bien.
+func TestFlowWeekBounds_lunesSinMedianoche(t *testing.T) {
+	sant, err := time.LoadLocation("America/Santiago")
+	if err != nil {
+		t.Skip("sin tzdata:", err)
+	}
+	// En Santiago el horario de verano empieza el domingo 2026-09-06 a las
+	// 00:00: la semana del lunes 31 de agosto termina el lunes 7 normal y el
+	// domingo no tiene medianoche. Se prueba dayStart sobre ese domingo.
+	d := dayStart(time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC), sant)
+	if got := d.In(sant).Format("2006-01-02 15:04"); got != "2026-09-06 01:00" {
+		t.Errorf("inicio del 2026-09-06 en Santiago = %s, quiero 01:00", got)
+	}
+	b := FlowWeekBounds(ts("2026-09-01T12:00:00Z"), ts("2026-09-10T00:00:00Z"), sant)
+	if len(b) != 2 || b[0][1].In(sant).Format("2006-01-02 15:04") != "2026-09-07 00:00" {
+		t.Errorf("semanas = %v", b)
+	}
+}
