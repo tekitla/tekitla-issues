@@ -241,20 +241,20 @@ apply 000006_event_source.up
 check "up de nuevo: todo sin fuente" "0" "SELECT count(source) FROM issues.issue_events"
 
 LABELS_BEFORE_7="$(sql "SELECT count(*) FROM issues.labels")"
-apply 000007_label_value.up
+apply 000007_label_counts_as_value.up
 echo "== 000007: ninguna etiqueta existente pasa a ser de valor"
-check "etiquetas existentes sin valor" "$LABELS_BEFORE_7|0" "SELECT count(*), count(*) FILTER (WHERE value) FROM issues.labels"
-must_fail "value NULL" "UPDATE issues.labels SET value = NULL"
-sql "UPDATE issues.labels SET value = true WHERE id = (SELECT id FROM issues.labels ORDER BY id LIMIT 1)"
+check "etiquetas existentes sin valor" "$LABELS_BEFORE_7|0" "SELECT count(*), count(*) FILTER (WHERE counts_as_value) FROM issues.labels"
+must_fail "counts_as_value NULL" "UPDATE issues.labels SET counts_as_value = NULL"
+sql "UPDATE issues.labels SET counts_as_value = true WHERE id = (SELECT id FROM issues.labels ORDER BY id LIMIT 1)"
 echo "ok   una etiqueta marcada de valor"
 
-apply 000007_label_value.down
-check "down: sin la columna value" "0" "SELECT count(*) FROM information_schema.columns
-  WHERE table_schema = 'issues' AND table_name = 'labels' AND column_name = 'value'"
+apply 000007_label_counts_as_value.down
+check "down: sin la columna counts_as_value" "0" "SELECT count(*) FROM information_schema.columns
+  WHERE table_schema = 'issues' AND table_name = 'labels' AND column_name = 'counts_as_value'"
 check "down: las etiquetas se conservan" "$LABELS_BEFORE_7" "SELECT count(*) FROM issues.labels"
 
-apply 000007_label_value.up
-check "up de nuevo: ninguna de valor" "0" "SELECT count(*) FILTER (WHERE value) FROM issues.labels"
+apply 000007_label_counts_as_value.up
+check "up de nuevo: ninguna de valor" "0" "SELECT count(*) FILTER (WHERE counts_as_value) FROM issues.labels"
 
 if [ "$fails" -ne 0 ]; then echo "Migraciones: con fallas"; exit 1; fi
 echo "Migraciones: todo ok"

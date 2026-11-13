@@ -56,9 +56,9 @@ func (p StatusPatch) IsEmpty() bool {
 // LabelPatch son los cambios de una etiqueta, ya validados (nil = no
 // cambia).
 type LabelPatch struct {
-	Name  *string
-	Color *model.LabelColor
-	Value *bool
+	Name          *string
+	Color         *model.LabelColor
+	CountsAsValue *bool
 }
 
 // LabelRepository define la persistencia de Label.

@@ -72,7 +72,7 @@ func (s *FlowService) GetFlowMetrics(ctx context.Context, ownerUID string, in Fl
 	}
 	q.ValueLabelIDs = []string{}
 	for _, l := range labels {
-		if l.Value {
+		if l.CountsAsValue {
 			q.ValueLabelIDs = append(q.ValueLabelIDs, l.ID)
 		}
 	}

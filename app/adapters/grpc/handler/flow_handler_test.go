@@ -76,8 +76,8 @@ func TestIssueHandler_GetFlowMetrics(t *testing.T) {
 		t.Fatalf("CreateProject: %v", err)
 	}
 	pid := created.GetProject().GetId()
-	feature, err := client.CreateLabel(ctx, &issuesv1.CreateLabelRequest{ProjectId: pid, Name: "feature", Value: true})
-	if err != nil || !feature.GetLabel().GetValue() {
+	feature, err := client.CreateLabel(ctx, &issuesv1.CreateLabelRequest{ProjectId: pid, Name: "feature", CountsAsValue: true})
+	if err != nil || !feature.GetLabel().GetCountsAsValue() {
 		t.Fatalf("CreateLabel de valor: %v %+v", err, feature)
 	}
 	for _, title := range []string{"con valor", "sin valor", "sigue en curso"} {

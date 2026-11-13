@@ -38,10 +38,10 @@ type Label struct {
 	// Name es único en el proyecto sin distinguir mayúsculas.
 	Name  string
 	Color LabelColor
-	// Value: cuenta como valor en las métricas de flujo (issue 036).
-	Value     bool
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	// CountsAsValue: cuenta como valor en las métricas de flujo (issue 036).
+	CountsAsValue bool
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // NormalizeLabelName recorta espacios y valida que el nombre no sea vacío ni

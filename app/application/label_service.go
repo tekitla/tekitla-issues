@@ -33,8 +33,8 @@ func (s *LabelService) ListLabels(ctx context.Context, ownerUID, projectID strin
 }
 
 // CreateLabel crea una etiqueta. Color sin especificar se guarda como
-// Neutral. value: cuenta como valor en las métricas de flujo.
-func (s *LabelService) CreateLabel(ctx context.Context, ownerUID, projectID, name string, color model.LabelColor, value bool) (*model.Label, error) {
+// Neutral. countsAsValue: cuenta como valor en las métricas de flujo.
+func (s *LabelService) CreateLabel(ctx context.Context, ownerUID, projectID, name string, color model.LabelColor, countsAsValue bool) (*model.Label, error) {
 	if _, err := s.guard.ensure(ctx, ownerUID, projectID); err != nil {
 		return nil, err
 	}
@@ -46,11 +46,11 @@ func (s *LabelService) CreateLabel(ctx context.Context, ownerUID, projectID, nam
 	if err != nil {
 		return nil, err
 	}
-	return s.labels.Create(ctx, &model.Label{ID: uuid.NewString(), ProjectID: projectID, Name: n, Color: c, Value: value})
+	return s.labels.Create(ctx, &model.Label{ID: uuid.NewString(), ProjectID: projectID, Name: n, Color: c, CountsAsValue: countsAsValue})
 }
 
 // UpdateLabel cambia nombre, color o si es de valor (nil = no cambia).
-func (s *LabelService) UpdateLabel(ctx context.Context, ownerUID, projectID, labelID string, name *string, color *model.LabelColor, value *bool) (*model.Label, error) {
+func (s *LabelService) UpdateLabel(ctx context.Context, ownerUID, projectID, labelID string, name *string, color *model.LabelColor, countsAsValue *bool) (*model.Label, error) {
 	if _, err := s.guard.ensure(ctx, ownerUID, projectID); err != nil {
 		return nil, err
 	}
@@ -73,7 +73,7 @@ func (s *LabelService) UpdateLabel(ctx context.Context, ownerUID, projectID, lab
 		}
 		c = &v
 	}
-	return s.labels.Update(ctx, projectID, labelID, port.LabelPatch{Name: n, Color: c, Value: value})
+	return s.labels.Update(ctx, projectID, labelID, port.LabelPatch{Name: n, Color: c, CountsAsValue: countsAsValue})
 }
 
 // DeleteLabel borra la etiqueta y la quita de todos los issues.

@@ -82,7 +82,7 @@ Reglas de negocio no obvias:
   anteriores a `000006`). Todo evento nuevo lleva su fuente explícita.
 - Etiquetas: máximo 100 por proyecto y 20 por issue; nombre único sin
   mayúsculas (`LABEL_NAME_TAKEN`); borrar una la quita de los issues sin evento.
-  `value` (036, `000007`): la etiqueta cuenta como valor en las métricas de
+  `counts_as_value` (036, `000007`): la etiqueta cuenta como valor en las métricas de
   flujo; la ponen `CreateLabel`/`UpdateLabel`, el importador no la toca.
 - `GetFlowMetrics` (036): el cálculo es puro (`model.ComputeFlowMetrics`,
   `model/flow.go`) sobre lo que lee `FlowRepository.ListFlowIssues` (tres
@@ -305,7 +305,7 @@ compose, ver `cli/healthcheck.go`) y reflection fuera de prod.
   `DEFAULT false`, que es lo que son todas las etiquetas existentes) y
   `000006` las del 036 (`source` y `source_ref` en `issue_events`, sin
   DEFAULT, e índice `(issue_id, created_at, seq)`) y `000007` la del 036
-  parte 2 (`labels.value`, `NOT NULL DEFAULT false`: ninguna etiqueta
+  parte 2 (`labels.counts_as_value`, `NOT NULL DEFAULT false`: ninguna etiqueta
   existente es de valor). Marcar `import_sync` los
   eventos viejos de ImportIssue de un proyecto espejo (y alinear su
   «creado» con el alta) es aparte y revisable:
@@ -368,7 +368,7 @@ git tag prod-v0.1.0 && git push origin prod-v0.1.0   # prod, automático salvo m
   v0.5 y **tiene que** aplicarse antes del deploy de la imagen que la usa
   (escribe `source`). `000007` es compatible con el binario de v0.4 (el
   DEFAULT cubre sus INSERT) y también va antes del deploy (la imagen nueva
-  lee `labels.value`).
+  lee `labels.counts_as_value`).
 - Release con cambios en `migrations/`: la guarda de prod bloquea. Aplicar el
   SQL por túnel SSH (`scripts/apply_migration.sh prod <migración> --apply`) y
   lanzar el override.

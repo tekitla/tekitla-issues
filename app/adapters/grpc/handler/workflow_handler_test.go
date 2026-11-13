@@ -268,8 +268,8 @@ func (s memLabels) Update(_ context.Context, _, id string, patch port.LabelPatch
 			if patch.Color != nil {
 				l.Color = *patch.Color
 			}
-			if patch.Value != nil {
-				l.Value = *patch.Value
+			if patch.CountsAsValue != nil {
+				l.CountsAsValue = *patch.CountsAsValue
 			}
 			return l, nil
 		}

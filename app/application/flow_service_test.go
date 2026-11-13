@@ -17,7 +17,7 @@ var flowNow = time.Date(2026, 11, 13, 18, 0, 0, 0, time.UTC)
 
 func flowLabels() *mockLabelRepo {
 	return &mockLabelRepo{listFn: func(context.Context, string) ([]*model.Label, error) {
-		return []*model.Label{{ID: labelFront, Name: "front"}, {ID: labelBug, Name: "bug", Value: true}}, nil
+		return []*model.Label{{ID: labelFront, Name: "front"}, {ID: labelBug, Name: "bug", CountsAsValue: true}}, nil
 	}}
 }
 

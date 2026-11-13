@@ -403,7 +403,7 @@ func TestCreateLabel_DefaultsColor(t *testing.T) {
 	if _, err := svc.CreateLabel(context.Background(), owner, validID, " Frontend ", model.LabelColorUnspecified, true); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got.Name != "Frontend" || got.Color != model.LabelColorNeutral || got.ProjectID != validID || got.ID == "" || !got.Value {
+	if got.Name != "Frontend" || got.Color != model.LabelColorNeutral || got.ProjectID != validID || got.ID == "" || !got.CountsAsValue {
 		t.Errorf("label: got %+v", got)
 	}
 	if _, err := svc.CreateLabel(context.Background(), owner, validID, "x", model.LabelColor(42), false); !domainerrors.IsValidation(err) {
@@ -421,7 +421,7 @@ func TestUpdateLabel(t *testing.T) {
 	if _, err := svc.UpdateLabel(context.Background(), owner, validID, labelFront, nil, ptr(model.LabelColorBrand), ptr(true)); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got.Name != nil || *got.Color != model.LabelColorBrand || !*got.Value {
+	if got.Name != nil || *got.Color != model.LabelColorBrand || !*got.CountsAsValue {
 		t.Errorf("update: %+v", got)
 	}
 	if _, err := svc.UpdateLabel(context.Background(), owner, validID, "nope", ptr("x"), nil, nil); !domainerrors.IsValidation(err) {
