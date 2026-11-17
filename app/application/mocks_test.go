@@ -217,7 +217,7 @@ func (m *mockStatusRepo) Delete(ctx context.Context, projectID, id, moveToID str
 type mockLabelRepo struct {
 	listFn   func(ctx context.Context, projectID string) ([]*model.Label, error)
 	createFn func(ctx context.Context, l *model.Label) (*model.Label, error)
-	updateFn func(ctx context.Context, projectID, id string, name *string, color *model.LabelColor) (*model.Label, error)
+	updateFn func(ctx context.Context, projectID, id string, patch port.LabelPatch) (*model.Label, error)
 	deleteFn func(ctx context.Context, projectID, id string) error
 }
 
@@ -237,11 +237,11 @@ func (m *mockLabelRepo) Create(ctx context.Context, l *model.Label) (*model.Labe
 	return m.createFn(ctx, l)
 }
 
-func (m *mockLabelRepo) Update(ctx context.Context, projectID, id string, name *string, color *model.LabelColor) (*model.Label, error) {
+func (m *mockLabelRepo) Update(ctx context.Context, projectID, id string, patch port.LabelPatch) (*model.Label, error) {
 	if m.updateFn == nil {
 		return nil, nil
 	}
-	return m.updateFn(ctx, projectID, id, name, color)
+	return m.updateFn(ctx, projectID, id, patch)
 }
 
 func (m *mockLabelRepo) Delete(ctx context.Context, projectID, id string) error {
@@ -344,4 +344,18 @@ func (m *mockTokenRepo) Resolve(ctx context.Context, hash []byte, now time.Time)
 		return nil, nil
 	}
 	return m.resolveFn(ctx, hash, now)
+}
+
+// mockFlowRepo satisface port.FlowRepository.
+type mockFlowRepo struct {
+	listFn func(ctx context.Context, projectID string, labelIDs []string) ([]model.FlowIssue, error)
+}
+
+var _ port.FlowRepository = (*mockFlowRepo)(nil)
+
+func (m *mockFlowRepo) ListFlowIssues(ctx context.Context, projectID string, labelIDs []string) ([]model.FlowIssue, error) {
+	if m.listFn == nil {
+		return nil, nil
+	}
+	return m.listFn(ctx, projectID, labelIDs)
 }

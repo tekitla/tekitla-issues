@@ -10,6 +10,9 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+	// Zonas IANA embebidas: GetFlowMetrics arma las semanas por zona (036) y
+	// no depende del tzdata de la imagen.
+	_ "time/tzdata"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -51,6 +54,7 @@ func main() {
 	labelRepo := postgres.NewLabelRepository(infra.DB)
 	actorRepo := postgres.NewActorRepository(infra.DB)
 	tokenRepo := postgres.NewTokenRepository(infra.DB)
+	flowRepo := postgres.NewFlowRepository(infra.DB)
 
 	// 4. Servicios de aplicación
 	projectSvc := application.NewProjectService(workspaceRepo, projectRepo)
@@ -58,9 +62,10 @@ func main() {
 	statusSvc := application.NewStatusService(workspaceRepo, projectRepo, statusRepo, actorRepo)
 	labelSvc := application.NewLabelService(workspaceRepo, projectRepo, labelRepo)
 	actorSvc := application.NewActorService(actorRepo, tokenRepo)
+	flowSvc := application.NewFlowService(workspaceRepo, projectRepo, labelRepo, flowRepo)
 
 	// 5. Handlers gRPC
-	issueHandler := handler.NewIssueHandler(infra.Logger, projectSvc, issueSvc, statusSvc, labelSvc)
+	issueHandler := handler.NewIssueHandler(infra.Logger, projectSvc, issueSvc, statusSvc, labelSvc, flowSvc)
 	actorHandler := handler.NewActorHandler(infra.Logger, actorSvc)
 	tokenAuthHandler := handler.NewTokenAuthHandler(infra.Logger, actorSvc)
 

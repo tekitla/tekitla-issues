@@ -16,12 +16,13 @@ import (
 
 // labelRow es la fila de issues.labels. Color es 1..7 (CHECK en la migración).
 type labelRow struct {
-	ID        string    `gorm:"primaryKey;column:id;type:uuid"`
-	ProjectID string    `gorm:"column:project_id;type:uuid;not null"`
-	Name      string    `gorm:"column:name;not null"`
-	Color     int       `gorm:"column:color;not null"`
-	CreatedAt time.Time `gorm:"column:created_at"`
-	UpdatedAt time.Time `gorm:"column:updated_at"`
+	ID            string    `gorm:"primaryKey;column:id;type:uuid"`
+	ProjectID     string    `gorm:"column:project_id;type:uuid;not null"`
+	Name          string    `gorm:"column:name;not null"`
+	Color         int       `gorm:"column:color;not null"`
+	CountsAsValue bool      `gorm:"column:counts_as_value;not null"`
+	CreatedAt     time.Time `gorm:"column:created_at"`
+	UpdatedAt     time.Time `gorm:"column:updated_at"`
 }
 
 func (labelRow) TableName() string { return "issues.labels" }
@@ -78,14 +79,17 @@ func (r *LabelRepository) Create(ctx context.Context, label *model.Label) (*mode
 	return fromLabelRow(row), nil
 }
 
-// Update cambia nombre y/o color.
-func (r *LabelRepository) Update(ctx context.Context, projectID, id string, name *string, color *model.LabelColor) (*model.Label, error) {
+// Update cambia lo que trae patch.
+func (r *LabelRepository) Update(ctx context.Context, projectID, id string, patch port.LabelPatch) (*model.Label, error) {
 	updates := map[string]any{"updated_at": dbNow()}
-	if name != nil {
-		updates["name"] = *name
+	if patch.Name != nil {
+		updates["name"] = *patch.Name
 	}
-	if color != nil {
-		updates["color"] = int(*color)
+	if patch.Color != nil {
+		updates["color"] = int(*patch.Color)
+	}
+	if patch.CountsAsValue != nil {
+		updates["counts_as_value"] = *patch.CountsAsValue
 	}
 	var rows []labelRow
 	res := r.db.WithContext(ctx).Model(&rows).Clauses(clause.Returning{}).
@@ -130,22 +134,24 @@ func labelError(err error, op string, details map[string]any) error {
 
 func toLabelRow(m *model.Label) *labelRow {
 	return &labelRow{
-		ID:        m.ID,
-		ProjectID: m.ProjectID,
-		Name:      m.Name,
-		Color:     int(m.Color),
-		CreatedAt: m.CreatedAt,
-		UpdatedAt: m.UpdatedAt,
+		ID:            m.ID,
+		ProjectID:     m.ProjectID,
+		Name:          m.Name,
+		Color:         int(m.Color),
+		CountsAsValue: m.CountsAsValue,
+		CreatedAt:     m.CreatedAt,
+		UpdatedAt:     m.UpdatedAt,
 	}
 }
 
 func fromLabelRow(r *labelRow) *model.Label {
 	return &model.Label{
-		ID:        r.ID,
-		ProjectID: r.ProjectID,
-		Name:      r.Name,
-		Color:     model.LabelColor(r.Color),
-		CreatedAt: r.CreatedAt,
-		UpdatedAt: r.UpdatedAt,
+		ID:            r.ID,
+		ProjectID:     r.ProjectID,
+		Name:          r.Name,
+		Color:         model.LabelColor(r.Color),
+		CountsAsValue: r.CountsAsValue,
+		CreatedAt:     r.CreatedAt,
+		UpdatedAt:     r.UpdatedAt,
 	}
 }
