@@ -272,6 +272,35 @@ func TestCreateIssue_EstadoInvalido(t *testing.T) {
 	}
 }
 
+func TestCreateIssue_EstadoErroresDelRepo(t *testing.T) {
+	// Un error de statuses.Get que no es NotFound se propaga tal cual.
+	statuses := projectStatuses()
+	statuses.getFn = func(context.Context, string, string) (*model.Status, error) {
+		return nil, domainerrors.InternalError("db down", nil)
+	}
+	svc := application.NewIssueService(personalWorkspaces(), ownedProjects(), failIssueRepo(t), statuses, &mockLabelRepo{}, &mockActorRepo{})
+	if _, err := svc.CreateIssue(context.Background(), as(owner), application.CreateIssueInput{ProjectID: validID, Title: "x", StatusID: stDoing.ID}); !domainerrors.IsInternal(err) {
+		t.Errorf("statuses.Get falla: got %v, quiero InternalError", err)
+	}
+
+	// El estado elegido se borra antes de la transacción: STATUS_NOT_IN_PROJECT.
+	gone := &mockIssueRepo{
+		createFn: func(context.Context, []string, *model.Issue, model.Author) (*model.Issue, error) {
+			return nil, domainerrors.FailedPreconditionError("status no longer exists", nil).WithReason("STALE_ORDER")
+		},
+	}
+	_, err := newIssueSvc(personalWorkspaces(), ownedProjects(), gone).CreateIssue(context.Background(), as(owner), application.CreateIssueInput{ProjectID: validID, Title: "x", StatusID: stDoing.ID})
+	var de *domainerrors.DomainError
+	if !domainerrors.IsValidation(err) || !errors.As(err, &de) || de.Reason != "STATUS_NOT_IN_PROJECT" {
+		t.Errorf("estado borrado en carrera: got %v", err)
+	}
+	// Sin status_id el estado lo eligió el servidor: sigue siendo STALE_ORDER.
+	_, err = newIssueSvc(personalWorkspaces(), ownedProjects(), gone).CreateIssue(context.Background(), as(owner), application.CreateIssueInput{ProjectID: validID, Title: "x"})
+	if !errors.As(err, &de) || de.Reason != "STALE_ORDER" {
+		t.Errorf("sin status_id: got %v", err)
+	}
+}
+
 func TestCreateIssue_PropagatesRepoError(t *testing.T) {
 	issues := &mockIssueRepo{
 		createFn: func(context.Context, []string, *model.Issue, model.Author) (*model.Issue, error) {

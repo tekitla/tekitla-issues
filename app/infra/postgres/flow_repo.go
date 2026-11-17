@@ -115,11 +115,13 @@ func (r *FlowRepository) ListFlowIssues(ctx context.Context, projectID string, l
 			ev.Source = model.EventSource(*e.Source)
 		}
 		if ev.Created && e.Data != nil {
-			var d createdData
-			if err := json.Unmarshal(e.Data, &d); err != nil {
+			born, err := decodeCreatedData(e.Data)
+			if err != nil {
 				return nil, domainerrors.InternalError("failed to read event data", map[string]any{"cause": err.Error(), "issue_id": e.IssueID})
 			}
-			ev.Born = model.IssueState(d.ToCategory)
+			if born != nil {
+				ev.Born = born.ToCategory
+			}
 		} else if e.Data != nil {
 			var d statusChangeData
 			if err := json.Unmarshal(e.Data, &d); err != nil {

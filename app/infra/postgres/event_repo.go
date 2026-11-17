@@ -67,6 +67,19 @@ type createdData struct {
 	ToCategory string `json:"to_category"`
 }
 
+// decodeCreatedData: el estado en el que nació, o nil si el alta no lo
+// guardó. Lo usan el historial y las métricas de flujo.
+func decodeCreatedData(data []byte) (*model.StatusChange, error) {
+	var d createdData
+	if err := json.Unmarshal(data, &d); err != nil {
+		return nil, err
+	}
+	if d.ToCategory == "" {
+		return nil, nil
+	}
+	return &model.StatusChange{ToID: d.ToID, ToName: d.ToName, ToCategory: model.IssueState(d.ToCategory)}, nil
+}
+
 // discardedData: el cambio de estado de DiscardIssue y su motivo. Restored
 // usa statusChangeData.
 type discardedData struct {
@@ -209,10 +222,7 @@ func fromEventRow(r *eventRow) (*model.IssueEvent, error) {
 	var err error
 	switch ev.Kind {
 	case model.EventCreated:
-		var d createdData
-		if err = json.Unmarshal(r.Data, &d); err == nil && d.ToCategory != "" {
-			ev.Status = &model.StatusChange{ToID: d.ToID, ToName: d.ToName, ToCategory: model.IssueState(d.ToCategory)}
-		}
+		ev.Status, err = decodeCreatedData(r.Data)
 	case model.EventStatusChanged, model.EventRestored:
 		var d statusChangeData
 		err = json.Unmarshal(r.Data, &d)

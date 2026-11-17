@@ -71,8 +71,9 @@ func (s EventSource) OrLive() EventSource {
 }
 
 // IssueEvent es un cambio en un issue, para su historial. Según Kind, viene
-// lleno uno de Status, Title, Priority, Labels o Comment (Created y
-// DescriptionChanged no tienen detalle). Discarded y Restored usan Status
+// lleno uno de Status, Title, Priority, Labels o Comment (DescriptionChanged
+// no tiene detalle; Created, solo Status.To* si guardó el estado en el que
+// nació, issue 033). Discarded y Restored usan Status
 // (de dónde a dónde), y Discarded además Reason. AssigneeChanged usa
 // Assignee.
 type IssueEvent struct {

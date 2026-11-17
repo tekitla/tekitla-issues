@@ -112,6 +112,8 @@ func (r *IssueRepository) Create(ctx context.Context, workspaceIDs []string, iss
 		} else if err != nil {
 			return err
 		}
+		// El issue y su evento de alta salen de la misma lectura del estado.
+		row.State = st.Category
 
 		row.Number = number
 		row.Rank = rank

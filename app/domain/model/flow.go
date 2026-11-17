@@ -398,14 +398,13 @@ func ComputeFlowMetrics(issues []FlowIssue, q FlowQuery) FlowMetrics {
 					w.Source.add(end.Source)
 					// Nació hecho (alta en vivo en DONE): cerrado, sin
 					// duración medida.
-					if end.Born {
-						break
-					}
-					leads[i] = append(leads[i], end.At.Sub(is.CreatedAt))
-					if started {
-						cycles[i] = append(cycles[i], end.At.Sub(start.At))
-						w.Source.add(start.Source)
-						countedStart = true
+					if !end.Born {
+						leads[i] = append(leads[i], end.At.Sub(is.CreatedAt))
+						if started {
+							cycles[i] = append(cycles[i], end.At.Sub(start.At))
+							w.Source.add(start.Source)
+							countedStart = true
+						}
 					}
 				case IssueStateCanceled:
 					w.Canceled++

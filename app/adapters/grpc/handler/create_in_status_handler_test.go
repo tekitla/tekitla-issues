@@ -70,7 +70,10 @@ func TestIssueHandler_CreateIssueEnUnEstado(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
-	otherSts, _ := client.ListStatuses(ctx, &issuesv1.ListStatusesRequest{ProjectId: other.GetProject().GetId()})
+	otherSts, err := client.ListStatuses(ctx, &issuesv1.ListStatusesRequest{ProjectId: other.GetProject().GetId()})
+	if err != nil || len(otherSts.GetStatuses()) == 0 {
+		t.Fatalf("ListStatuses del otro proyecto: %+v, %v", otherSts, err)
+	}
 	for name, c := range map[string]struct{ statusID, reason string }{
 		"descartado":       {canceled.GetId(), "CANCELED_STATUS"},
 		"de otro proyecto": {otherSts.GetStatuses()[0].GetId(), "STATUS_NOT_IN_PROJECT"},

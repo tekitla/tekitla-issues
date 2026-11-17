@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"time"
 
@@ -227,8 +228,9 @@ func (s *IssueService) GetIssue(ctx context.Context, ownerUID, projectID string,
 	return s.issues.GetByNumber(ctx, projectID, number)
 }
 
-// CreateIssue crea un issue en el primer estado «por hacer» del proyecto, con
-// el siguiente número y al final de su orden.
+// CreateIssue crea un issue en el estado in.StatusID (vacío: el primer
+// estado «por hacer» del proyecto), con el siguiente número y al final de su
+// orden.
 func (s *IssueService) CreateIssue(ctx context.Context, who model.Author, in CreateIssueInput) (*model.Issue, error) {
 	workspaceIDs, err := s.guard.ensureAuthor(ctx, who, in.ProjectID)
 	if err != nil {
@@ -271,7 +273,19 @@ func (s *IssueService) CreateIssue(ctx context.Context, who model.Author, in Cre
 
 		AssigneeActorID: assignee,
 	}
-	return s.issues.Create(ctx, workspaceIDs, issue, who)
+	created, err := s.issues.Create(ctx, workspaceIDs, issue, who)
+	var de *domainerrors.DomainError
+	if in.StatusID != "" && errors.As(err, &de) && de.Reason == "STALE_ORDER" {
+		// El estado que eligió el cliente se borró entre la validación y la
+		// transacción: para él es un estado que ya no es del proyecto.
+		return nil, statusNotInProject(in.StatusID)
+	}
+	return created, err
+}
+
+func statusNotInProject(statusID string) error {
+	return domainerrors.ValidationError("status is not part of the project", map[string]any{"field": "status_id", "value": statusID}).
+		WithReason("STATUS_NOT_IN_PROJECT")
 }
 
 // bornStatus es el estado en el que nace un issue: statusID si viene (del
@@ -289,14 +303,12 @@ func (s *IssueService) bornStatus(ctx context.Context, projectID, statusID strin
 		}
 		return todo, nil
 	}
-	notInProject := domainerrors.ValidationError("status is not part of the project", map[string]any{"field": "status_id", "value": statusID}).
-		WithReason("STATUS_NOT_IN_PROJECT")
 	if _, err := uuid.Parse(statusID); err != nil {
-		return nil, notInProject
+		return nil, statusNotInProject(statusID)
 	}
 	status, err := s.statuses.Get(ctx, projectID, statusID)
 	if domainerrors.IsNotFound(err) {
-		return nil, notInProject
+		return nil, statusNotInProject(statusID)
 	}
 	if err != nil {
 		return nil, err
