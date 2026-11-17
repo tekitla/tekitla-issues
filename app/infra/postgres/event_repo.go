@@ -59,6 +59,14 @@ type statusChangeData struct {
 	ToCategory   string `json:"to_category"`
 }
 
+// createdData: el estado en el que nace el issue (issue 033). Los altas
+// anteriores y los de ImportIssue guardan {}.
+type createdData struct {
+	ToID       string `json:"to_id"`
+	ToName     string `json:"to_name"`
+	ToCategory string `json:"to_category"`
+}
+
 // discardedData: el cambio de estado de DiscardIssue y su motivo. Restored
 // usa statusChangeData.
 type discardedData struct {
@@ -135,6 +143,10 @@ func agentIDOrNil(author model.Author) *string {
 func eventData(ev *model.IssueEvent) ([]byte, error) {
 	var v any = struct{}{}
 	switch ev.Kind {
+	case model.EventCreated:
+		if c := ev.Status; c != nil {
+			v = createdData{ToID: c.ToID, ToName: c.ToName, ToCategory: string(c.ToCategory)}
+		}
 	case model.EventStatusChanged, model.EventRestored:
 		v = toStatusChangeData(ev.Status)
 	case model.EventDiscarded:
@@ -196,6 +208,11 @@ func fromEventRow(r *eventRow) (*model.IssueEvent, error) {
 	}
 	var err error
 	switch ev.Kind {
+	case model.EventCreated:
+		var d createdData
+		if err = json.Unmarshal(r.Data, &d); err == nil && d.ToCategory != "" {
+			ev.Status = &model.StatusChange{ToID: d.ToID, ToName: d.ToName, ToCategory: model.IssueState(d.ToCategory)}
+		}
 	case model.EventStatusChanged, model.EventRestored:
 		var d statusChangeData
 		err = json.Unmarshal(r.Data, &d)

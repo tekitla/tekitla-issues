@@ -85,7 +85,10 @@ type IssueEvent struct {
 	// lo hizo la persona (y en los eventos anteriores al issue 025).
 	AgentID string
 	Kind    EventKind
-	Status  *StatusChange
+	// Status: el cambio de estado. En EventCreated, solo To* (el estado en
+	// el que nace, issue 033); nil en los altas anteriores y en las
+	// importadas.
+	Status *StatusChange
 	// Reason es el motivo, solo en EventDiscarded.
 	Reason    string
 	Title     *TitleChange

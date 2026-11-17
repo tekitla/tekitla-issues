@@ -241,6 +241,37 @@ func TestCreateIssue_Validation(t *testing.T) {
 	}
 }
 
+// Alta en una columna (issue 033): nace en el estado pedido.
+func TestCreateIssue_EnUnEstado(t *testing.T) {
+	issues := &mockIssueRepo{
+		createFn: func(_ context.Context, _ []string, issue *model.Issue, _ model.Author) (*model.Issue, error) {
+			return issue, nil
+		},
+	}
+	svc := newIssueSvc(personalWorkspaces(), ownedProjects(), issues)
+	for _, st := range []*model.Status{stTodo, stDoing, stDone} {
+		got, err := svc.CreateIssue(context.Background(), as(owner), application.CreateIssueInput{ProjectID: validID, Title: "x", StatusID: st.ID})
+		if err != nil || got.StatusID != st.ID || got.State != st.Category {
+			t.Errorf("%s: got %+v, err %v", st.Name, got, err)
+		}
+	}
+}
+
+func TestCreateIssue_EstadoInvalido(t *testing.T) {
+	svc := newIssueSvc(personalWorkspaces(), ownedProjects(), failIssueRepo(t))
+	for name, c := range map[string]struct{ statusID, reason string }{
+		"de otro proyecto": {"66666666-6666-4666-8666-666666666666", "STATUS_NOT_IN_PROJECT"},
+		"no es un UUID":    {"por-hacer", "STATUS_NOT_IN_PROJECT"},
+		"descartado":       {stCanceled.ID, "CANCELED_STATUS"},
+	} {
+		_, err := svc.CreateIssue(context.Background(), as(owner), application.CreateIssueInput{ProjectID: validID, Title: "x", StatusID: c.statusID})
+		var de *domainerrors.DomainError
+		if !domainerrors.IsValidation(err) || !errors.As(err, &de) || de.Reason != c.reason {
+			t.Errorf("%s: got %v, quiero ValidationError con reason %s", name, err, c.reason)
+		}
+	}
+}
+
 func TestCreateIssue_PropagatesRepoError(t *testing.T) {
 	issues := &mockIssueRepo{
 		createFn: func(context.Context, []string, *model.Issue, model.Author) (*model.Issue, error) {

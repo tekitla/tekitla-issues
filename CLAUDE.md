@@ -80,6 +80,11 @@ Reglas de negocio no obvias:
   cambio (DTOs en `event_repo.go`: solo agregar campos). `source` (036):
   `live`, `import_history`, `import_file` o `import_sync`; NULL = LIVE (los
   anteriores a `000006`). Todo evento nuevo lleva su fuente explícita.
+- `CreateIssue` con `status_id` (033): nace en ese estado, al final del
+  orden. Uno de otro proyecto o que no es UUID: `STATUS_NOT_IN_PROJECT`;
+  uno CANCELED: `CANCELED_STATUS` (descartar pide motivo). El evento
+  `created` guarda `{to_id, to_name, to_category}` (los anteriores y los de
+  ImportIssue, `{}`).
 - Etiquetas: máximo 100 por proyecto y 20 por issue; nombre único sin
   mayúsculas (`LABEL_NAME_TAKEN`); borrar una la quita de los issues sin evento.
   `counts_as_value` (036, `000007`): la etiqueta cuenta como valor en las métricas de
@@ -92,13 +97,17 @@ Reglas de negocio no obvias:
     `(created_at, seq)`; solo cuenta el destino, y una transición a la
     categoría actual no hace nada. `import_sync` cuenta solo si es posterior
     al último evento `import_history`/`import_file` del issue (o si no tiene
-    ninguno). La categoría inicial es el origen de la primera transición; sin
-    transiciones, la actual. Dos entradas con la misma fecha van por orden.
+    ninguno). La categoría inicial es la del alta si es `live` y la guardó
+    (033: `CreateIssue` con `status_id`; la entrada tiene fecha); si no, el
+    origen de la primera transición, y sin transiciones, la actual. Dos
+    entradas con la misma fecha van por orden.
   - Terminado: la última entrada a DONE de la semana, si sigue en DONE al
     final. Lead time: del alta a esa entrada; cycle time: de la primera
     entrada a IN_PROGRESS. Sobre todo lo hecho; las etiquetas de valor solo
     separan `closed_value` de `closed_other` (decisión de Victor,
-    2026-11-13). En DONE desde el alta sin transición: `done_without_dates`.
+    2026-11-13). En DONE desde el alta sin transición: `done_without_dates`,
+    salvo un alta en vivo en DONE (033): cuenta como cerrado esa semana, sin
+    lead ni cycle time (decisión de Victor, 2026-11-17).
   - Semanas de lunes 00:00 en `time_zone` (por defecto
     `America/Mexico_City`; `time/tzdata` embebido en `cli/main.go`).
     Período por defecto 12 semanas, máximo 104; un `to` futuro se toma como

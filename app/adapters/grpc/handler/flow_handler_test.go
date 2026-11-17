@@ -35,7 +35,10 @@ func (s memFlow) ListFlowIssues(_ context.Context, projectID string, labelIDs []
 				continue
 			}
 			fe := model.FlowEvent{At: ev.CreatedAt, Source: ev.Source, Created: ev.Kind == model.EventCreated}
-			if ev.Status != nil {
+			switch {
+			case fe.Created && ev.Status != nil:
+				fe.Born = ev.Status.ToCategory
+			case ev.Status != nil:
 				fe.Transition, fe.From, fe.To = true, ev.Status.FromCategory, ev.Status.ToCategory
 			}
 			fi.Events = append(fi.Events, fe)

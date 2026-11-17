@@ -30,8 +30,10 @@ type FlowEvent struct {
 	// From y To solo valen en ese caso.
 	Transition bool
 	From, To   IssueState
-	// Created: el evento «creado» (su fuente es la del alta).
+	// Created: el evento «creado» (su fuente es la del alta). Born: el
+	// estado en el que nació, si el alta lo guardó (issue 033).
 	Created bool
+	Born    IssueState
 }
 
 // FlowIssue es un issue con lo que usan las métricas. Events va ordenado
@@ -221,13 +223,15 @@ func dayStart(date time.Time, loc *time.Location) time.Time {
 	return d
 }
 
-// stateEntry es la entrada de un issue a una categoría. Dated: viene de una
-// transición (la primera entrada, la del alta, no).
+// stateEntry es la entrada de un issue a una categoría. Dated: tiene una
+// fecha real, la de una transición o la de un alta en vivo que guardó su
+// estado. Born: es la entrada del alta (no tiene lead ni cycle time).
 type stateEntry struct {
 	At     time.Time
 	State  IssueState
 	Source EventSource
 	Dated  bool
+	Born   bool
 }
 
 // timeline arma las entradas a cada categoría de un issue (ver el
@@ -235,15 +239,19 @@ type stateEntry struct {
 //   - Cuentan las transiciones live, import_history e import_file, y las
 //     import_sync posteriores al último evento importado con fecha (o
 //     todas si el issue no tiene ninguno).
-//   - La categoría inicial es la de origen de la primera transición que
-//     cuenta; sin transiciones, la actual.
+//   - La categoría inicial es aquella en la que nació si el alta es en vivo
+//     y la guardó (issue 033; entonces la entrada tiene fecha); si no, la
+//     de origen de la primera transición que cuenta, y sin transiciones, la
+//     actual.
 //   - Una transición a la categoría en la que ya está no hace nada.
 func timeline(is *FlowIssue) []stateEntry {
 	hasDated, lastDated := datedHorizon(is)
 	createdSrc := EventSourceLive
+	var born IssueState
 	for _, ev := range is.Events {
 		if ev.Created {
 			createdSrc = ev.Source.OrLive()
+			born = ev.Born
 		}
 	}
 	var accepted []FlowEvent
@@ -253,10 +261,14 @@ func timeline(is *FlowIssue) []stateEntry {
 		}
 	}
 	initial := is.State
-	if len(accepted) > 0 && accepted[0].From.IsValid() {
+	bornDated := createdSrc == EventSourceLive && born.IsValid()
+	switch {
+	case bornDated:
+		initial = born
+	case len(accepted) > 0 && accepted[0].From.IsValid():
 		initial = accepted[0].From
 	}
-	out := []stateEntry{{At: is.CreatedAt, State: initial, Source: createdSrc}}
+	out := []stateEntry{{At: is.CreatedAt, State: initial, Source: createdSrc, Dated: bornDated, Born: true}}
 	cur := initial
 	for _, ev := range accepted {
 		if ev.To == cur || !ev.To.IsValid() {
@@ -384,6 +396,11 @@ func ComputeFlowMetrics(issues []FlowIssue, q FlowQuery) FlowMetrics {
 						w.ClosedOther++
 					}
 					w.Source.add(end.Source)
+					// Nació hecho (alta en vivo en DONE): cerrado, sin
+					// duración medida.
+					if end.Born {
+						break
+					}
 					leads[i] = append(leads[i], end.At.Sub(is.CreatedAt))
 					if started {
 						cycles[i] = append(cycles[i], end.At.Sub(start.At))

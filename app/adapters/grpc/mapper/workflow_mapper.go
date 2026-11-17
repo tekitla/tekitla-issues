@@ -135,7 +135,11 @@ func IssueEventToProto(m *model.IssueEvent) (*issuesv1.IssueEvent, error) {
 	}
 	switch m.Kind {
 	case model.EventCreated:
-		out.Change = &issuesv1.IssueEvent_Created{Created: &issuesv1.IssueCreated{}}
+		created := &issuesv1.IssueCreated{}
+		if c := m.Status; c != nil {
+			created.StatusId, created.StatusName, created.State = c.ToID, c.ToName, IssueStateToProto(c.ToCategory)
+		}
+		out.Change = &issuesv1.IssueEvent_Created{Created: created}
 	case model.EventStatusChanged:
 		c := m.Status
 		out.Change = &issuesv1.IssueEvent_StatusChanged{StatusChanged: &issuesv1.StatusChanged{

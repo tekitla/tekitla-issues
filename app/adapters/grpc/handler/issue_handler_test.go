@@ -152,7 +152,14 @@ func (s memIssues) Create(_ context.Context, workspaceIDs []string, issue *model
 	issue.CreatedAt, issue.UpdatedAt = time.Now(), time.Now()
 	issue.LabelIDs = []string{}
 	s.issues = append(s.issues, issue)
-	s.addEvent(issue.ID, author, &model.IssueEvent{Kind: model.EventCreated})
+	// Como el repo de Postgres: el alta guarda el estado en el que nace.
+	born := &model.StatusChange{ToID: issue.StatusID, ToCategory: issue.State}
+	for _, st := range s.statuses {
+		if st.ID == issue.StatusID {
+			born.ToName = st.Name
+		}
+	}
+	s.addEvent(issue.ID, author, &model.IssueEvent{Kind: model.EventCreated, Status: born})
 	return issue, nil
 }
 
