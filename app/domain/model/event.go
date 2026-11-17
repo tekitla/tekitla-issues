@@ -71,8 +71,9 @@ func (s EventSource) OrLive() EventSource {
 }
 
 // IssueEvent es un cambio en un issue, para su historial. Según Kind, viene
-// lleno uno de Status, Title, Priority, Labels o Comment (Created y
-// DescriptionChanged no tienen detalle). Discarded y Restored usan Status
+// lleno uno de Status, Title, Priority, Labels o Comment (DescriptionChanged
+// no tiene detalle; Created, solo Status.To* si guardó el estado en el que
+// nació, issue 033). Discarded y Restored usan Status
 // (de dónde a dónde), y Discarded además Reason. AssigneeChanged usa
 // Assignee.
 type IssueEvent struct {
@@ -85,7 +86,10 @@ type IssueEvent struct {
 	// lo hizo la persona (y en los eventos anteriores al issue 025).
 	AgentID string
 	Kind    EventKind
-	Status  *StatusChange
+	// Status: el cambio de estado. En EventCreated, solo To* (el estado en
+	// el que nace, issue 033); nil en los altas anteriores y en las
+	// importadas.
+	Status *StatusChange
 	// Reason es el motivo, solo en EventDiscarded.
 	Reason    string
 	Title     *TitleChange

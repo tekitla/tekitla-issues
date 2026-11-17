@@ -152,6 +152,7 @@ func (h *IssueHandler) CreateIssue(ctx context.Context, req *issuesv1.CreateIssu
 		Priority:    mapper.PriorityFromProto(req.GetPriority()),
 
 		AssigneeActorID: req.GetAssigneeActorId(),
+		StatusID:        req.GetStatusId(),
 	})
 	if err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)

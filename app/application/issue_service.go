@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"time"
 
@@ -85,6 +86,9 @@ type CreateIssueInput struct {
 	Priority    model.Priority
 	// AssigneeActorID vacío = sin asignar.
 	AssigneeActorID string
+	// StatusID es el estado en el que nace (issue 033). Vacío = el primer
+	// estado de la categoría TODO. No puede ser de categoría CANCELED.
+	StatusID string
 }
 
 // MoveIssueInput son los datos que acepta MoveIssue. StatusID manda sobre
@@ -224,8 +228,9 @@ func (s *IssueService) GetIssue(ctx context.Context, ownerUID, projectID string,
 	return s.issues.GetByNumber(ctx, projectID, number)
 }
 
-// CreateIssue crea un issue en el primer estado «por hacer» del proyecto, con
-// el siguiente número y al final de su orden.
+// CreateIssue crea un issue en el estado in.StatusID (vacío: el primer
+// estado «por hacer» del proyecto), con el siguiente número y al final de su
+// orden.
 func (s *IssueService) CreateIssue(ctx context.Context, who model.Author, in CreateIssueInput) (*model.Issue, error) {
 	workspaceIDs, err := s.guard.ensureAuthor(ctx, who, in.ProjectID)
 	if err != nil {
@@ -246,14 +251,9 @@ func (s *IssueService) CreateIssue(ctx context.Context, who model.Author, in Cre
 	if !priority.IsValid() {
 		return nil, invalidPriority(in.Priority)
 	}
-	statuses, err := s.statuses.List(ctx, in.ProjectID)
+	born, err := s.bornStatus(ctx, in.ProjectID, in.StatusID)
 	if err != nil {
 		return nil, err
-	}
-	todo := model.FirstStatusOf(statuses, model.IssueStateTodo)
-	if todo == nil {
-		// DeleteStatus nunca deja una categoría vacía: es un problema de datos.
-		return nil, domainerrors.InternalError("project has no todo status", map[string]any{"project_id": in.ProjectID})
 	}
 	assignee := ""
 	if in.AssigneeActorID != "" {
@@ -267,13 +267,57 @@ func (s *IssueService) CreateIssue(ctx context.Context, who model.Author, in Cre
 		ProjectID:   in.ProjectID,
 		Title:       title,
 		Description: desc,
-		State:       todo.Category,
-		StatusID:    todo.ID,
+		State:       born.Category,
+		StatusID:    born.ID,
 		Priority:    priority,
 
 		AssigneeActorID: assignee,
 	}
-	return s.issues.Create(ctx, workspaceIDs, issue, who)
+	created, err := s.issues.Create(ctx, workspaceIDs, issue, who)
+	var de *domainerrors.DomainError
+	if in.StatusID != "" && errors.As(err, &de) && de.Reason == "STALE_ORDER" {
+		// El estado que eligió el cliente se borró entre la validación y la
+		// transacción: para él es un estado que ya no es del proyecto.
+		return nil, statusNotInProject(in.StatusID)
+	}
+	return created, err
+}
+
+func statusNotInProject(statusID string) error {
+	return domainerrors.ValidationError("status is not part of the project", map[string]any{"field": "status_id", "value": statusID}).
+		WithReason("STATUS_NOT_IN_PROJECT")
+}
+
+// bornStatus es el estado en el que nace un issue: statusID si viene (del
+// proyecto y no CANCELED: descartar pide motivo), o el primero de TODO.
+func (s *IssueService) bornStatus(ctx context.Context, projectID, statusID string) (*model.Status, error) {
+	if statusID == "" {
+		statuses, err := s.statuses.List(ctx, projectID)
+		if err != nil {
+			return nil, err
+		}
+		todo := model.FirstStatusOf(statuses, model.IssueStateTodo)
+		if todo == nil {
+			// DeleteStatus nunca deja una categoría vacía: es un problema de datos.
+			return nil, domainerrors.InternalError("project has no todo status", map[string]any{"project_id": projectID})
+		}
+		return todo, nil
+	}
+	if _, err := uuid.Parse(statusID); err != nil {
+		return nil, statusNotInProject(statusID)
+	}
+	status, err := s.statuses.Get(ctx, projectID, statusID)
+	if domainerrors.IsNotFound(err) {
+		return nil, statusNotInProject(statusID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if status.Category == model.IssueStateCanceled {
+		return nil, domainerrors.ValidationError("an issue cannot be created canceled: discard it with a reason", map[string]any{"field": "status_id", "value": statusID}).
+			WithReason("CANCELED_STATUS")
+	}
+	return status, nil
 }
 
 // MoveIssue cambia el estado de un issue y, opcionalmente, su lugar en la

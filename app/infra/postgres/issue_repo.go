@@ -106,18 +106,24 @@ func (r *IssueRepository) Create(ctx context.Context, workspaceIDs []string, iss
 
 		// El estado lo eligió el service antes de la transacción: con el lock
 		// del proyecto tomado, se verifica que siga existiendo.
-		if _, err := getStatusRow(tx, issue.ProjectID, issue.StatusID); errors.Is(err, gorm.ErrRecordNotFound) {
+		st, err := getStatusRow(tx, issue.ProjectID, issue.StatusID)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return statusGone(issue.StatusID)
 		} else if err != nil {
 			return err
 		}
+		// El issue y su evento de alta salen de la misma lectura del estado.
+		row.State = st.Category
 
 		row.Number = number
 		row.Rank = rank
 		if err := tx.Create(row).Error; err != nil {
 			return err
 		}
-		if err := insertEvent(tx, row.ID, author, &model.IssueEvent{Kind: model.EventCreated}, now); err != nil {
+		// El alta guarda el estado en el que nace (issue 033): las métricas
+		// de flujo la toman como la entrada a ese estado.
+		born := &model.StatusChange{ToID: st.ID, ToName: st.Name, ToCategory: model.IssueState(st.Category)}
+		if err := insertEvent(tx, row.ID, author, &model.IssueEvent{Kind: model.EventCreated, Status: born}, now); err != nil {
 			return err
 		}
 		if issue.AssigneeActorID == "" {

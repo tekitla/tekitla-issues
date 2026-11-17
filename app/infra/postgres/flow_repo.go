@@ -27,6 +27,10 @@ func NewFlowRepository(db *gorm.DB) *FlowRepository {
 // Kinds de evento que cambian la categoría del issue.
 var transitionKinds = []string{string(model.EventStatusChanged), string(model.EventDiscarded), string(model.EventRestored)}
 
+// dataKinds: los eventos cuyos datos lee el cálculo (las transiciones y el
+// alta, que guarda el estado en el que nace desde el issue 033).
+var dataKinds = append([]string{string(model.EventCreated)}, transitionKinds...)
+
 // ListFlowIssues: ver port.FlowRepository.
 func (r *FlowRepository) ListFlowIssues(ctx context.Context, projectID string, labelIDs []string) ([]model.FlowIssue, error) {
 	details := map[string]any{"project_id": projectID}
@@ -94,7 +98,7 @@ func (r *FlowRepository) ListFlowIssues(ctx context.Context, projectID string, l
 		Source    *string
 	}
 	err = scope(db.Table("issues.issue_events AS e").
-		Select("e.issue_id, e.kind, CASE WHEN e.kind IN ? THEN e.data END AS data, e.created_at, e.source", transitionKinds).
+		Select("e.issue_id, e.kind, CASE WHEN e.kind IN ? THEN e.data END AS data, e.created_at, e.source", dataKinds).
 		Joins("JOIN issues.issues i ON i.id = e.issue_id")).
 		Order("e.issue_id, e.created_at, e.seq").
 		Scan(&evs).Error
@@ -110,7 +114,15 @@ func (r *FlowRepository) ListFlowIssues(ctx context.Context, projectID string, l
 		if e.Source != nil {
 			ev.Source = model.EventSource(*e.Source)
 		}
-		if e.Data != nil {
+		if ev.Created && e.Data != nil {
+			born, err := decodeCreatedData(e.Data)
+			if err != nil {
+				return nil, domainerrors.InternalError("failed to read event data", map[string]any{"cause": err.Error(), "issue_id": e.IssueID})
+			}
+			if born != nil {
+				ev.Born = born.ToCategory
+			}
+		} else if e.Data != nil {
 			var d statusChangeData
 			if err := json.Unmarshal(e.Data, &d); err != nil {
 				return nil, domainerrors.InternalError("failed to read event data", map[string]any{"cause": err.Error(), "issue_id": e.IssueID})

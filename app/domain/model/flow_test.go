@@ -409,3 +409,56 @@ func TestFlowWeekBounds_lunesSinMedianoche(t *testing.T) {
 		t.Errorf("semanas = %v", b)
 	}
 }
+
+func born(at string, src EventSource, state IssueState) FlowEvent {
+	return FlowEvent{At: ts(at), Source: src, Created: true, Born: state}
+}
+
+// Alta en una columna (issue 033): el alta en vivo que guardó su estado es
+// la entrada a ese estado, con fecha.
+func TestComputeFlowMetrics_altaEnColumna(t *testing.T) {
+	issues := []FlowIssue{
+		{ // Nace hecho el 2: cerrado esa semana, sin lead ni cycle time.
+			Number: 1, State: done, CreatedAt: ts("2026-06-02T10:00:00Z"),
+			Events: []FlowEvent{born("2026-06-02T10:00:00Z", live, done)},
+		},
+		{ // Nace en curso el 3 y se termina el 10: empezado en la semana 1,
+			// cycle time de 7 días desde el alta.
+			Number: 2, State: done, CreatedAt: ts("2026-06-03T10:00:00Z"),
+			Events: []FlowEvent{
+				born("2026-06-03T10:00:00Z", live, doing),
+				move("2026-06-10T10:00:00Z", live, doing, done),
+			},
+		},
+		{ // Nace en curso el 4 y sigue: WIP.
+			Number: 3, State: doing, CreatedAt: ts("2026-06-04T10:00:00Z"),
+			Events: []FlowEvent{born("2026-06-04T10:00:00Z", live, doing)},
+		},
+		{ // Importado ya hecho: el estado del alta no cuenta (no es en vivo).
+			Number: 4, State: done, CreatedAt: ts("2026-06-02T10:00:00Z"),
+			Events: []FlowEvent{born("2026-06-02T10:00:00Z", sync, done)},
+		},
+		{ // Nace hecho y se reabre el 9: deja de contar como cerrado.
+			Number: 5, State: doing, CreatedAt: ts("2026-06-02T10:00:00Z"),
+			Events: []FlowEvent{
+				born("2026-06-02T10:00:00Z", live, done),
+				move("2026-06-09T10:00:00Z", live, done, doing),
+			},
+		},
+	}
+	m := ComputeFlowMetrics(issues, query("2026-06-01T00:00:00Z", "2026-06-15T00:00:00Z"))
+	w1, w2 := m.Weeks[0], m.Weeks[1]
+	if w1.ClosedValue != 2 || w1.LeadTime.Count != 0 || w1.CycleTime.Count != 0 {
+		t.Errorf("semana 1 = %+v, quiero 2 cerrados (1 y 5) sin lead ni cycle time", w1)
+	}
+	if w1.Started != 2 || w1.WIP != 2 || w1.Source.Confidence() != MetricConfidenceRecorded {
+		t.Errorf("semana 1 = %+v, quiero 2 empezados (2 y 3), WIP 2 y registrado", w1)
+	}
+	if w2.ClosedValue != 1 || w2.CycleTime.Count != 1 || w2.CycleTime.Median != 7*24*time.Hour ||
+		w2.LeadTime.Median != 7*24*time.Hour || w2.WIP != 2 {
+		t.Errorf("semana 2 = %+v, quiero el 2 cerrado con cycle y lead de 7 días, WIP 2 (3 y 5)", w2)
+	}
+	if m.DoneWithoutDates != 1 {
+		t.Errorf("sin fechas = %d, quiero 1 (el importado)", m.DoneWithoutDates)
+	}
+}
