@@ -69,7 +69,7 @@ CREATE TABLE issues.agent_sessions (
     CONSTRAINT agent_sessions_link_chk CHECK (link IN ('none', 'agent_name', 'workspace', 'cwd')),
     CONSTRAINT agent_sessions_issue_chk CHECK (
         (project_id IS NULL AND issue_number IS NULL AND link = 'none')
-        OR (project_id IS NOT NULL AND issue_number > 0 AND link <> 'none')),
+        OR (project_id IS NOT NULL AND issue_number IS NOT NULL AND issue_number > 0 AND link <> 'none')),
     CONSTRAINT agent_sessions_status_chk CHECK (status IN ('working', 'waiting_ok', 'idle', 'ended', 'unknown')),
     CONSTRAINT agent_sessions_ended_chk CHECK ((status = 'ended') = (ended_at IS NOT NULL)),
     CONSTRAINT agent_sessions_waiting_on_chk CHECK (waiting_on IN ('none', 'person', 'session', 'other')),

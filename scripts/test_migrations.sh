@@ -4,7 +4,7 @@
 # =============================================================================
 # Aplica migrations/*.up.sql en orden y, antes de cada migración con backfill,
 # carga datos de la versión anterior para verificar que el backfill los deja
-# bien. Al final prueba down -> up de cada una que lo pide (hoy 000005, 000006 y 000007). No toca ninguna base real:
+# bien. Al final prueba down -> up de cada una que lo pide (hoy 000005, 000006, 000007 y 000009). No toca ninguna base real:
 # levanta un contenedor propio y lo borra al terminar.
 #
 #   scripts/test_migrations.sh        (o `make test-migrations`)
@@ -255,6 +255,60 @@ check "down: las etiquetas se conservan" "$LABELS_BEFORE_7" "SELECT count(*) FRO
 
 apply 000007_label_counts_as_value.up
 check "up de nuevo: ninguna de valor" "0" "SELECT count(*) FILTER (WHERE counts_as_value) FROM issues.labels"
+
+echo "== datos para 000009: una persona, un agente y tokens"
+P9="00000000-0000-4000-8000-0000000000f1"
+A9="00000000-0000-4000-8000-0000000000f2"
+sql "INSERT INTO issues.actors (id, kind, user_uid, display_name, created_at) VALUES ('$P9', 'person', 'u9', '', now())"
+sql "INSERT INTO issues.actors (id, kind, owner_actor_id, tool, display_name, created_at) VALUES ('$A9', 'agent', '$P9', 'claude_code', 'Claude Code PC-01', now())"
+tok() { echo "INSERT INTO issues.tokens (id, actor_id, name, token_hash, scopes, created_at, expires_at)
+  VALUES (gen_random_uuid(), '$P9', '$1', decode(repeat('$2', 32), 'hex'), $3, now(), now() + interval '30 days')"; }
+must_fail "sessions:write antes de 000009" "$(tok pre 01 "ARRAY['sessions:write']")"
+sql "$(tok read 02 "ARRAY['issues:read']")"
+TOKENS_BEFORE_9="$(sql "SELECT count(*) FROM issues.tokens" | tr -d '\r')"
+
+apply 000009_agent_sessions.up
+echo "== 000009: los tokens existentes no cambian"
+check "tokens intactos" "$TOKENS_BEFORE_9|1" "SELECT count(*), count(*) FILTER (WHERE scopes = ARRAY['issues:read']) FROM issues.tokens"
+sql "$(tok only 03 "ARRAY['sessions:write']")"
+sql "$(tok mixed 04 "ARRAY['issues:read', 'sessions:write']")"
+echo "ok   tokens con sessions:write"
+must_fail "scope desconocido" "$(tok bad 05 "ARRAY['sessions:admin']")"
+
+echo "== restricciones de 000009"
+ses() { # ses <external_id> <project_id|NULL> <issue_number|NULL> <link> <status> <waiting_on> <ended_at|NULL> [machine] [cwd]
+  echo "INSERT INTO issues.agent_sessions (id, owner_actor_id, agent_actor_id, source, machine, external_id, tool,
+    cwd_rel, session_name, workspace_label, project_id, issue_number, link, status, waiting_on, waiting_target,
+    waiting_text, status_changed_at, last_seen_at, started_at, ended_at)
+  VALUES (gen_random_uuid(), '$P9', '$A9', 'herdr', '${8:-PC-01}', '$1', 'claude_code', '${9:-tekitla/worktrees/issue-26}', '', '',
+    $2, $3, '$4', '$5', '$6', '', '', now(), now(), now(), $7)"; }
+sql "$(ses s1 "'$TK'" 26 cwd working none NULL)"
+sql "$(ses s2 NULL NULL none waiting_ok person NULL)"
+sql "$(ses s3 NULL NULL none ended none "now()")"
+echo "ok   sesiones ligada, sin issue y terminada"
+must_fail "external_id repetido en la máquina" "$(ses s1 NULL NULL none idle none NULL)"
+sql "$(ses s1 NULL NULL none idle none NULL PC-02)"
+echo "ok   el mismo external_id en otra máquina"
+must_fail "máquina con espacio" "$(ses x1 NULL NULL none idle none NULL 'PC 01')"
+must_fail "estado colgado guardado" "$(ses x2 NULL NULL none stalled none NULL)"
+must_fail "terminada sin ended_at" "$(ses x3 NULL NULL none ended none NULL)"
+must_fail "activa con ended_at" "$(ses x4 NULL NULL none idle none "now()")"
+must_fail "trabajando y esperando" "$(ses x5 NULL NULL none working person NULL)"
+must_fail "proyecto sin número" "$(ses x6 "'$TK'" NULL cwd idle none NULL)"
+must_fail "número sin proyecto" "$(ses x7 NULL 3 cwd idle none NULL)"
+must_fail "ligada con link none" "$(ses x8 "'$TK'" 3 none idle none NULL)"
+must_fail "sin issue con link" "$(ses x9 NULL NULL cwd idle none NULL)"
+must_fail "FK al agente" "UPDATE issues.agent_sessions SET agent_actor_id = gen_random_uuid() WHERE external_id = 's2'"
+check "índice parcial del resumen" "1" "SELECT count(*) FROM pg_indexes WHERE schemaname = 'issues' AND indexname = 'agent_sessions_issue_idx'"
+
+apply 000009_agent_sessions.down
+check "down: sin la tabla" "0" "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'issues' AND table_name = 'agent_sessions'"
+check "down: tokens sin sessions:write (el que solo tenía ese se borra)" "$((TOKENS_BEFORE_9 + 1))|0|1" "SELECT count(*),
+  count(*) FILTER (WHERE 'sessions:write' = ANY (scopes)), count(*) FILTER (WHERE name = 'mixed' AND scopes = ARRAY['issues:read']) FROM issues.tokens"
+must_fail "down: sessions:write rechazado otra vez" "$(tok post 06 "ARRAY['sessions:write']")"
+
+apply 000009_agent_sessions.up
+check "up de nuevo: tabla vacía" "0" "SELECT count(*) FROM issues.agent_sessions"
 
 if [ "$fails" -ne 0 ]; then echo "Migraciones: con fallas"; exit 1; fi
 echo "Migraciones: todo ok"
