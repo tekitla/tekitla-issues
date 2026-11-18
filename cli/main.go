@@ -55,6 +55,7 @@ func main() {
 	actorRepo := postgres.NewActorRepository(infra.DB)
 	tokenRepo := postgres.NewTokenRepository(infra.DB)
 	flowRepo := postgres.NewFlowRepository(infra.DB)
+	sessionRepo := postgres.NewAgentSessionRepository(infra.DB)
 
 	// 4. Servicios de aplicación
 	projectSvc := application.NewProjectService(workspaceRepo, projectRepo)
@@ -63,11 +64,13 @@ func main() {
 	labelSvc := application.NewLabelService(workspaceRepo, projectRepo, labelRepo)
 	actorSvc := application.NewActorService(actorRepo, tokenRepo)
 	flowSvc := application.NewFlowService(workspaceRepo, projectRepo, labelRepo, flowRepo)
+	sessionSvc := application.NewAgentSessionService(workspaceRepo, actorRepo, sessionRepo, infra.Config.SessionStallAfter)
 
 	// 5. Handlers gRPC
-	issueHandler := handler.NewIssueHandler(infra.Logger, projectSvc, issueSvc, statusSvc, labelSvc, flowSvc)
+	issueHandler := handler.NewIssueHandler(infra.Logger, projectSvc, issueSvc, statusSvc, labelSvc, flowSvc).WithSessions(sessionSvc)
 	actorHandler := handler.NewActorHandler(infra.Logger, actorSvc)
 	tokenAuthHandler := handler.NewTokenAuthHandler(infra.Logger, actorSvc)
+	sessionHandler := handler.NewAgentSessionHandler(infra.Logger, sessionSvc)
 
 	// 6. Servidor gRPC
 	grpcServer := grpc.NewServer(
@@ -75,6 +78,7 @@ func main() {
 	)
 	issuesv1.RegisterIssueServiceServer(grpcServer, issueHandler)
 	issuesv1.RegisterActorServiceServer(grpcServer, actorHandler)
+	issuesv1.RegisterAgentSessionServiceServer(grpcServer, sessionHandler)
 	// Interno: lo llama solo el gateway (el servicio no tiene puerto publicado).
 	issuesv1.RegisterTokenAuthServiceServer(grpcServer, tokenAuthHandler)
 

@@ -85,6 +85,8 @@ func TokenScopesFromProto(scopes []issuesv1.TokenScope) []model.TokenScope {
 			out[i] = model.TokenScopeIssuesRead
 		case issuesv1.TokenScope_TOKEN_SCOPE_ISSUES_WRITE:
 			out[i] = model.TokenScopeIssuesWrite
+		case issuesv1.TokenScope_TOKEN_SCOPE_SESSIONS_WRITE:
+			out[i] = model.TokenScopeSessionsWrite
 		default:
 			out[i] = model.TokenScope(fmt.Sprintf("unknown(%d)", int32(s)))
 		}
@@ -101,6 +103,8 @@ func TokenScopesToProto(scopes []model.TokenScope) []issuesv1.TokenScope {
 			out = append(out, issuesv1.TokenScope_TOKEN_SCOPE_ISSUES_READ)
 		case model.TokenScopeIssuesWrite:
 			out = append(out, issuesv1.TokenScope_TOKEN_SCOPE_ISSUES_WRITE)
+		case model.TokenScopeSessionsWrite:
+			out = append(out, issuesv1.TokenScope_TOKEN_SCOPE_SESSIONS_WRITE)
 		}
 	}
 	return out

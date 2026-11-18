@@ -201,10 +201,13 @@ func newClient(t *testing.T) issuesv1.IssueServiceClient {
 
 // clients son los tres servicios del micro sobre el mismo store.
 type clients struct {
-	issues issuesv1.IssueServiceClient
-	actors issuesv1.ActorServiceClient
-	auth   issuesv1.TokenAuthServiceClient
-	store  *memStore
+	issues   issuesv1.IssueServiceClient
+	actors   issuesv1.ActorServiceClient
+	auth     issuesv1.TokenAuthServiceClient
+	sessions issuesv1.AgentSessionServiceClient
+	store    *memStore
+	// clock: el reloj del servicio de sesiones (los tests lo adelantan).
+	clock *testClock
 }
 
 func newClients(t *testing.T) clients {
@@ -215,6 +218,8 @@ func newClients(t *testing.T) clients {
 	statuses, labels := memStatuses{store}, memLabels{store}
 	actors, tokens := memActors{store}, memTokens{store}
 	actorSvc := application.NewActorService(actors, tokens)
+	clock := &testClock{t: time.Now().UTC().Truncate(time.Microsecond)}
+	sessionSvc := application.NewAgentSessionService(workspaces, actors, &memSessions{store: store}, 0).WithClock(clock.now)
 	h := handler.NewIssueHandler(zap.NewNop(),
 		application.NewProjectService(workspaces, projects),
 		application.NewIssueService(workspaces, projects, issues, statuses, labels, actors),
@@ -224,13 +229,14 @@ func newClients(t *testing.T) clients {
 		// ser igual a la fecha de los eventos recién creados, y to es exclusivo.
 		application.NewFlowService(workspaces, projects, labels, memFlow{store}).
 			WithClock(func() time.Time { return time.Now().UTC().Add(time.Minute) }),
-	)
+	).WithSessions(sessionSvc)
 
 	lis := bufconn.Listen(1 << 20)
 	srv := grpc.NewServer()
 	issuesv1.RegisterIssueServiceServer(srv, h)
 	issuesv1.RegisterActorServiceServer(srv, handler.NewActorHandler(zap.NewNop(), actorSvc))
 	issuesv1.RegisterTokenAuthServiceServer(srv, handler.NewTokenAuthHandler(zap.NewNop(), actorSvc))
+	issuesv1.RegisterAgentSessionServiceServer(srv, handler.NewAgentSessionHandler(zap.NewNop(), sessionSvc))
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
 
@@ -243,10 +249,12 @@ func newClients(t *testing.T) clients {
 	}
 	t.Cleanup(func() { _ = conn.Close() })
 	return clients{
-		issues: issuesv1.NewIssueServiceClient(conn),
-		actors: issuesv1.NewActorServiceClient(conn),
-		auth:   issuesv1.NewTokenAuthServiceClient(conn),
-		store:  store,
+		issues:   issuesv1.NewIssueServiceClient(conn),
+		actors:   issuesv1.NewActorServiceClient(conn),
+		auth:     issuesv1.NewTokenAuthServiceClient(conn),
+		sessions: issuesv1.NewAgentSessionServiceClient(conn),
+		store:    store,
+		clock:    clock,
 	}
 }
 
