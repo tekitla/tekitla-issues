@@ -47,8 +47,9 @@ type Doc struct {
 	FolderNumber int32
 
 	// Categorías y responsable (issue 039).
-	// RawCategories son los campos de categoría tal como vienen: Round,
-	// «Perfil:» (prefijo perfil/); template-docs, perfil y categoria.
+	// RawCategories son los campos que se vuelven etiquetas <prefijo>/<valor>,
+	// tal como vienen: Round, «Perfil:» y «Espera:»; template-docs, perfil,
+	// categoria y espera.
 	RawCategories []RawCategory
 	// RawResponsible es el «Responsable:» de Round ("" si no está).
 	RawResponsible string
@@ -127,7 +128,10 @@ func ParseDoc(path, file string, content []byte) (*Doc, error) {
 	doc.RawDate = firstOf(fields, "fecha detectado", "detectado", "fecha")
 	doc.RawResolved = fields["fecha resuelto"]
 	if v, ok := fields["perfil"]; ok {
-		doc.RawCategories = []RawCategory{{Prefix: ProfilePrefix, Raw: v}}
+		doc.RawCategories = append(doc.RawCategories, RawCategory{Prefix: ProfilePrefix, Raw: v})
+	}
+	if v, ok := fields["espera"]; ok {
+		doc.RawCategories = append(doc.RawCategories, RawCategory{Prefix: WaitingPrefix, Raw: v})
 	}
 	doc.RawResponsible = fields["responsable"]
 	if titleLine >= 0 {
@@ -276,6 +280,11 @@ func normalizeLabel(s string) string {
 
 // ProfilePrefix es el prefijo de las etiquetas de perfil (issue 039).
 const ProfilePrefix = "perfil"
+
+// WaitingPrefix es el prefijo de las etiquetas de lo que espera a una persona
+// («Espera: victor» → espera/victor; issue 039, CU-039-8). Como toda etiqueta
+// del importador, si la línea desaparece del doc, la etiqueta se quita.
+const WaitingPrefix = "espera"
 
 // CategoryLabels convierte un campo de categoría («escuela, Familia») en
 // etiquetas <prefix>/<valor>: cada valor separado por coma, sin negritas ni

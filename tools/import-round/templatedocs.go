@@ -70,6 +70,8 @@ type frontmatter struct {
 	// Categoría (issue 039): una cadena «a, b» o una lista.
 	Perfil    stringList `yaml:"perfil"`
 	Categoria stringList `yaml:"categoria"`
+	// A quién espera (CU-039-8): espera/<nombre>.
+	Espera stringList `yaml:"espera"`
 }
 
 // CategoryPrefix es el prefijo de las etiquetas del campo categoria de
@@ -175,6 +177,9 @@ func ParseTemplateDoc(path, dir string, content []byte) (*Doc, error) {
 	}
 	if fm.Categoria != "" {
 		doc.RawCategories = append(doc.RawCategories, RawCategory{Prefix: CategoryPrefix, Raw: string(fm.Categoria)})
+	}
+	if fm.Espera != "" {
+		doc.RawCategories = append(doc.RawCategories, RawCategory{Prefix: WaitingPrefix, Raw: string(fm.Espera)})
 	}
 
 	// El cuerpo, sin el título (# ...) si repite titulo (o si no hay titulo:
