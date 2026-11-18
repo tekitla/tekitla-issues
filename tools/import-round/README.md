@@ -55,7 +55,7 @@ go run ./tools/import-round -formato template-docs -dir <repo> -user <uid> -proj
 | `estado`: `abierto` · `en-curso` · `bloqueado` · `resuelto` · `descartado` | Por hacer · En curso · En curso + etiqueta `bloqueado` · Hecho · Descartado |
 | `prioridad`: `alta` · `media` · `baja` | `HIGH` · `MEDIUM` · `LOW` |
 | `tipo`, `area`, `repos` | Etiquetas, en minúsculas y sin repetir (`bloqueado` va después de `tipo`). Más de 20: se quedan las primeras y se avisa |
-| `perfil`, `categoria` | Etiquetas `perfil/<valor>` y `categoria/<valor>` (issue 039). Texto `a, b` o lista YAML |
+| `perfil`, `categoria`, `espera` | Etiquetas `perfil/<valor>`, `categoria/<valor>` y `espera/<nombre>` (issue 039). Texto `a, b` o lista YAML |
 | `creado` | Fecha de alta (solo al crear) |
 | `resuelto` | Línea «Resuelto: AAAA-MM-DD» al pie de la descripción. El contrato no tiene esa fecha |
 | Cuerpo | Descripción, sin el `# ` que repite el título, con enlace al `issue.md` en GitHub (rama `main`) y al `plan.md` si lo hay |
@@ -72,6 +72,11 @@ runbooks, índices y planes no se importan.
   sin acentos y con los espacios como `-` (`Admin Round` →
   `perfil/admin-round`). Lo que sigue a `—` o `(` no cuenta. Son etiquetas
   del importador: si el valor sale del doc, sale del issue.
+- **`Espera:`** en la cabecera de Round (`> **Espera:** victor`, con o sin
+  `>`) y `espera` en el frontmatter de template-docs: etiqueta
+  `espera/<nombre>`, con las mismas reglas. La vista Plan la muestra en la
+  caja «Esperan a <persona>» (CU-039-8). Si la línea desaparece, la etiqueta
+  se quita: el archivo manda.
 - **`Responsable:`** (Round): se compara, sin mayúsculas ni acentos, con los
   agentes no revocados de quien importa. Si coincide, se asigna con
   `UpdateIssue`, solo si cambia. Las personas no tienen nombre en Tekitla:
