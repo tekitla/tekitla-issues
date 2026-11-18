@@ -4,7 +4,7 @@
 # =============================================================================
 # Aplica migrations/*.up.sql en orden y, antes de cada migración con backfill,
 # carga datos de la versión anterior para verificar que el backfill los deja
-# bien. Al final prueba down -> up de cada una que lo pide (hoy 000005, 000006 y 000007). No toca ninguna base real:
+# bien. Al final prueba down -> up de cada una que lo pide (hoy 000005, 000006, 000007 y 000008). No toca ninguna base real:
 # levanta un contenedor propio y lo borra al terminar.
 #
 #   scripts/test_migrations.sh        (o `make test-migrations`)
@@ -255,6 +255,40 @@ check "down: las etiquetas se conservan" "$LABELS_BEFORE_7" "SELECT count(*) FRO
 
 apply 000007_label_counts_as_value.up
 check "up de nuevo: ninguna de valor" "0" "SELECT count(*) FILTER (WHERE counts_as_value) FROM issues.labels"
+
+# ---------------------------------------------------------------------------
+# 000008 (issue 009): enlaces de solo lectura. Solo una tabla nueva.
+# ---------------------------------------------------------------------------
+PROJECTS_BEFORE_8="$(sql "SELECT count(*) FROM issues.projects")"
+apply 000008_share_links.up
+P8="$(sql "SELECT id FROM issues.projects ORDER BY id LIMIT 1")"
+H32="decode(repeat('ab', 32), 'hex')"
+link() { # link <id> <hash> <scope> <note> <owner_name> <expires_at|NULL>
+  echo "INSERT INTO issues.share_links (id, project_id, token_hash, scope, note, owner_display_name, created_by_uid, created_at, expires_at)
+        VALUES ('$1', '$P8', $2, '$3', '$4', '$5', 'u1', '2026-11-18T12:00:00Z', $6)"
+}
+sql "$(link 00000000-0000-4000-8000-0000000008a1 "$H32" plan jefe Victor "'2026-12-18T12:00:00Z'")"
+sql "$(link 00000000-0000-4000-8000-0000000008a2 "decode(repeat('cd', 32), 'hex')" panel compañero '' NULL)"
+echo "ok   enlaces plan (con vencimiento) y panel (sin vencimiento)"
+check "los proyectos no cambian" "$PROJECTS_BEFORE_8" "SELECT count(*) FROM issues.projects"
+must_fail "hash repetido" "$(link 00000000-0000-4000-8000-0000000008a3 "$H32" plan otro '' NULL)"
+must_fail "hash de otro largo" "$(link 00000000-0000-4000-8000-0000000008a4 "decode('abcd', 'hex')" plan otro '' NULL)"
+must_fail "alcance desconocido" "$(link 00000000-0000-4000-8000-0000000008a5 "decode(repeat('01', 32), 'hex')" board otro '' NULL)"
+must_fail "nota vacía" "$(link 00000000-0000-4000-8000-0000000008a6 "decode(repeat('02', 32), 'hex')" plan '' '' NULL)"
+must_fail "nota de 81" "$(link 00000000-0000-4000-8000-0000000008a7 "decode(repeat('03', 32), 'hex')" plan "$(printf 'n%.0s' $(seq 1 81))" '' NULL)"
+must_fail "nombre de 41" "$(link 00000000-0000-4000-8000-0000000008a8 "decode(repeat('04', 32), 'hex')" plan otro "$(printf 'v%.0s' $(seq 1 41))" NULL)"
+must_fail "vence antes de crearse" "$(link 00000000-0000-4000-8000-0000000008a9 "decode(repeat('05', 32), 'hex')" plan otro '' "'2026-11-01T00:00:00Z'")"
+must_fail "proyecto inexistente" "INSERT INTO issues.share_links (id, project_id, token_hash, scope, note, owner_display_name, created_by_uid, created_at)
+  VALUES ('00000000-0000-4000-8000-0000000008b1', '00000000-0000-4000-8000-0000000009ff', decode(repeat('06', 32), 'hex'), 'plan', 'x', '', 'u1', now())"
+must_fail "created_by vacío" "INSERT INTO issues.share_links (id, project_id, token_hash, scope, note, owner_display_name, created_by_uid, created_at)
+  VALUES ('00000000-0000-4000-8000-0000000008b2', '$P8', decode(repeat('07', 32), 'hex'), 'plan', 'x', '', '', now())"
+
+apply 000008_share_links.down
+check "down: sin la tabla share_links" "0" "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'issues' AND table_name = 'share_links'"
+check "down: los proyectos se conservan" "$PROJECTS_BEFORE_8" "SELECT count(*) FROM issues.projects"
+
+apply 000008_share_links.up
+check "up de nuevo: tabla vacía" "0" "SELECT count(*) FROM issues.share_links"
 
 if [ "$fails" -ne 0 ]; then echo "Migraciones: con fallas"; exit 1; fi
 echo "Migraciones: todo ok"
