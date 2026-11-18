@@ -343,8 +343,8 @@ compose, ver `cli/healthcheck.go`) y reflection fuera de prod.
   `000006` las del 036 (`source` y `source_ref` en `issue_events`, sin
   DEFAULT, e índice `(issue_id, created_at, seq)`) y `000007` la del 036
   parte 2 (`labels.counts_as_value`, `NOT NULL DEFAULT false`: ninguna etiqueta
-  existente es de valor) y `000008` la del 009 (`share_links`, tabla nueva:
-  la que se mergea primero entre el 009 y el 026 se queda con el número).
+  existente es de valor) y `000008` la del 009 (`share_links`, tabla nueva;
+  el 026 toma `000009`).
   Marcar `import_sync` los
   eventos viejos de ImportIssue de un proyecto espejo (y alinear su
   «creado» con el alta) es aparte y revisable:
@@ -421,7 +421,7 @@ git tag prod-v0.1.0 && git push origin prod-v0.1.0   # prod, automático salvo m
 
 ## Protos
 
-Repo de protos: `github.com/tekitla/tekitla-protos`, hoy en una pseudo-versión de la rama del 009 (pasa a `v0.10.0` antes del merge)
+Repo de protos: `github.com/tekitla/tekitla-protos`, hoy en una pseudo-versión de la rama del 009 (pasa a `v0.9.0` antes del merge)
 (`go.mod`). Paquete Go `github.com/tekitla/tekitla-protos/gen/go/issues/v1`
 (alias `issuesv1`), usado solo en `handler/`, `mapper/` y `cli/main.go`.
 

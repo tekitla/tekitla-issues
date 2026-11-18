@@ -1,14 +1,13 @@
 -- ============================================================
--- Issue 009 (tekitla-protos v0.10.0): enlaces de solo lectura de un proyecto.
+-- Issue 009 (tekitla-protos v0.9.0): enlaces de solo lectura de un proyecto.
 -- ============================================================
 -- Solo crea una tabla nueva: ningún dato existente cambia de significado y
 -- el binario anterior no la lee ni la escribe, así que se puede aplicar antes
 -- del deploy. Sin BEGIN/COMMIT propios: scripts/apply_migration.sh envuelve
 -- el archivo en una transacción (y lo prueba en seco con ROLLBACK).
 --
--- Número: la migración del 009 y la del 026 se escriben en paralelo; la que
--- se mergea primero se queda con 000008 y la otra se renumera antes de su
--- merge (decisión de Victor, 2026-11-18).
+-- Número: el 009 se queda con 000008 y el 026 toma 000009 (decisión de
+-- Victor, 2026-11-18: el 009 publica primero).
 
 CREATE TABLE issues.share_links (
     id                 UUID        NOT NULL,
