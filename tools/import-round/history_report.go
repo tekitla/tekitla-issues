@@ -25,7 +25,7 @@ func runHistory(ctx context.Context, o options, src *source, out io.Writer) erro
 	existing := Existing{}
 	if !o.dryRun {
 		var closeConn func()
-		ctx, client, closeConn, err = connect(ctx, o)
+		ctx, client, _, closeConn, err = connect(ctx, o)
 		if err != nil {
 			return err
 		}

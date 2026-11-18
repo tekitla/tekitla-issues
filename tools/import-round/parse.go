@@ -45,6 +45,20 @@ type Doc struct {
 	HasPlan bool
 	// FolderNumber es el número del nombre de la carpeta, si difiere del id.
 	FolderNumber int32
+
+	// Categorías y responsable (issue 039).
+	// RawCategories son los campos de categoría tal como vienen: Round,
+	// «Perfil:» (prefijo perfil/); template-docs, perfil y categoria.
+	RawCategories []RawCategory
+	// RawResponsible es el «Responsable:» de Round ("" si no está).
+	RawResponsible string
+}
+
+// RawCategory es un campo de categoría: Prefix es el prefijo de sus
+// etiquetas (sin la barra) y Raw los valores separados por comas.
+type RawCategory struct {
+	Prefix string
+	Raw    string
 }
 
 // fileName: número + slug. Los demás .md (README, _template) no son issues.
@@ -112,6 +126,10 @@ func ParseDoc(path, file string, content []byte) (*Doc, error) {
 	doc.RawArea = firstOf(fields, "area principal", "area")
 	doc.RawDate = firstOf(fields, "fecha detectado", "detectado", "fecha")
 	doc.RawResolved = fields["fecha resuelto"]
+	if v, ok := fields["perfil"]; ok {
+		doc.RawCategories = []RawCategory{{Prefix: ProfilePrefix, Raw: v}}
+	}
+	doc.RawResponsible = fields["responsable"]
 	if titleLine >= 0 {
 		lines = append(lines[:titleLine:titleLine], lines[titleLine+1:]...)
 	}
@@ -254,6 +272,53 @@ func normalizeLabel(s string) string {
 		s = string([]rune(s)[:LabelMaxLen])
 	}
 	return strings.TrimSpace(s)
+}
+
+// ProfilePrefix es el prefijo de las etiquetas de perfil (issue 039).
+const ProfilePrefix = "perfil"
+
+// CategoryLabels convierte un campo de categoría («escuela, Familia») en
+// etiquetas <prefix>/<valor>: cada valor separado por coma, sin negritas ni
+// comillas invertidas, en minúsculas, sin acentos y con los espacios
+// internos como «-». Lo que sigue a «—» o «(» es aclaración y no cuenta.
+// Sin vacías ni repetidas, en el orden en que vienen.
+func CategoryLabels(prefix, raw string) []string {
+	s := raw
+	if i := strings.IndexAny(s, "—("); i >= 0 {
+		s = s[:i]
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, part := range strings.Split(s, ",") {
+		v := strings.NewReplacer("**", "", "`", "", "_", " ").Replace(part)
+		v = strings.Join(strings.Fields(foldAccents(strings.ToLower(v))), "-")
+		v = strings.Trim(v, "-.;:")
+		if v == "" {
+			continue
+		}
+		label := normalizeLabel(prefix + "/" + v)
+		if !seen[label] {
+			seen[label] = true
+			out = append(out, label)
+		}
+	}
+	return out
+}
+
+// ResponsibleName es el nombre del «Responsable:»: sin negritas ni comillas
+// invertidas y sin la aclaración después de «—» o «(». "" si no hay.
+func ResponsibleName(raw string) string {
+	s := raw
+	if i := strings.IndexAny(s, "—("); i >= 0 {
+		s = s[:i]
+	}
+	s = strings.NewReplacer("**", "", "`", "").Replace(s)
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// nameKey compara nombres sin mayúsculas, acentos ni espacios de más.
+func nameKey(s string) string {
+	return strings.Join(strings.Fields(foldAccents(strings.ToLower(s))), " ")
 }
 
 // TitleMaxLen es el largo máximo de un título en Tekitla.

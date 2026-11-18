@@ -67,6 +67,42 @@ type frontmatter struct {
 	Repos     []string `yaml:"repos"`
 	Creado    string   `yaml:"creado"`
 	Resuelto  string   `yaml:"resuelto"`
+	// Categoría (issue 039): una cadena «a, b» o una lista.
+	Perfil    stringList `yaml:"perfil"`
+	Categoria stringList `yaml:"categoria"`
+}
+
+// CategoryPrefix es el prefijo de las etiquetas del campo categoria de
+// template-docs (issue 039).
+const CategoryPrefix = "categoria"
+
+// stringList acepta un escalar («escuela, familia») o una lista YAML; los
+// valores quedan unidos por comas, como en Round.
+type stringList string
+
+func (l *stringList) UnmarshalYAML(n *yaml.Node) error {
+	switch n.Kind {
+	case yaml.ScalarNode:
+		if n.Tag == "!!null" {
+			*l = ""
+			return nil
+		}
+		*l = stringList(n.Value)
+		return nil
+	case yaml.SequenceNode:
+		var parts []string
+		for _, c := range n.Content {
+			if c.Kind != yaml.ScalarNode {
+				return fmt.Errorf("línea %d: la lista solo puede tener textos", c.Line)
+			}
+			if c.Tag != "!!null" {
+				parts = append(parts, c.Value)
+			}
+		}
+		*l = stringList(strings.Join(parts, ", "))
+		return nil
+	}
+	return fmt.Errorf("línea %d: tiene que ser un texto o una lista", n.Line)
 }
 
 // errNoFrontmatter: el issue.md no empieza con un bloque --- ... ---.
@@ -134,6 +170,12 @@ func ParseTemplateDoc(path, dir string, content []byte) (*Doc, error) {
 		doc.FolderNumber = int32(folderNumber)
 	}
 	doc.RawLabels = append([]string{fm.Tipo, fm.Area}, fm.Repos...)
+	if fm.Perfil != "" {
+		doc.RawCategories = append(doc.RawCategories, RawCategory{Prefix: ProfilePrefix, Raw: string(fm.Perfil)})
+	}
+	if fm.Categoria != "" {
+		doc.RawCategories = append(doc.RawCategories, RawCategory{Prefix: CategoryPrefix, Raw: string(fm.Categoria)})
+	}
 
 	// El cuerpo, sin el título (# ...) si repite titulo (o si no hay titulo:
 	// entonces es el título). Un # distinto de titulo se queda en el cuerpo.
