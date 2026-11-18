@@ -45,6 +45,7 @@ type memStore struct {
 	events     []*model.IssueEvent
 	actors     []*model.Actor
 	tokens     []*memToken
+	shareLinks []*memShareLink
 }
 
 func newMemStore() *memStore {
@@ -204,6 +205,8 @@ type clients struct {
 	issues issuesv1.IssueServiceClient
 	actors issuesv1.ActorServiceClient
 	auth   issuesv1.TokenAuthServiceClient
+	share  issuesv1.ShareLinkServiceClient
+	shared issuesv1.SharedProjectServiceClient
 	store  *memStore
 }
 
@@ -231,6 +234,9 @@ func newClients(t *testing.T) clients {
 	issuesv1.RegisterIssueServiceServer(srv, h)
 	issuesv1.RegisterActorServiceServer(srv, handler.NewActorHandler(zap.NewNop(), actorSvc))
 	issuesv1.RegisterTokenAuthServiceServer(srv, handler.NewTokenAuthHandler(zap.NewNop(), actorSvc))
+	shareSvc := application.NewShareLinkService(workspaces, projects, memShareLinks{store}, issues, statuses, labels, actors)
+	issuesv1.RegisterShareLinkServiceServer(srv, handler.NewShareLinkHandler(zap.NewNop(), shareSvc))
+	issuesv1.RegisterSharedProjectServiceServer(srv, handler.NewSharedProjectHandler(zap.NewNop(), shareSvc))
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
 
@@ -246,6 +252,8 @@ func newClients(t *testing.T) clients {
 		issues: issuesv1.NewIssueServiceClient(conn),
 		actors: issuesv1.NewActorServiceClient(conn),
 		auth:   issuesv1.NewTokenAuthServiceClient(conn),
+		share:  issuesv1.NewShareLinkServiceClient(conn),
+		shared: issuesv1.NewSharedProjectServiceClient(conn),
 		store:  store,
 	}
 }
