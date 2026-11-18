@@ -71,9 +71,14 @@ type options struct {
 	history   bool
 	detail    bool
 	overwrite bool
+	// me es el nombre con el que los docs nombran a quien importa (-user):
+	// un «Responsable:» con ese nombre se le asigna (issue 039). Las
+	// personas no tienen nombre en Tekitla; los agentes sí.
+	me string
 
-	// client reemplaza la conexión gRPC (tests).
+	// client y actors reemplazan la conexión gRPC (tests).
 	client issuesv1.IssueServiceClient
+	actors issuesv1.ActorServiceClient
 }
 
 func main() {
@@ -90,6 +95,7 @@ func main() {
 	flag.BoolVar(&o.history, "historico", false, "round: reconstruir el histórico de estados desde git y cargarlo (issue 036)")
 	flag.BoolVar(&o.detail, "detalle", false, "con -historico: listar cada evento")
 	flag.BoolVar(&o.overwrite, "sobrescribir", false, "con -historico: reescribir los eventos ya cargados (para corregir una carga equivocada)")
+	flag.StringVar(&o.me, "yo", "", "nombre con el que los docs nombran a quien importa (p. ej. Victor): su «Responsable:» se le asigna")
 	flag.Parse()
 
 	if err := run(context.Background(), o, os.Stdout); err != nil {
@@ -220,8 +226,12 @@ func run(ctx context.Context, o options, out io.Writer) error {
 	if o.dryRun {
 		plan := MakePlan(docs, Existing{})
 		rep.Plan = plan
+		// Sin servicio no hay actores: todo responsable sale como sin cuenta,
+		// salvo el de -yo.
+		people := responsibles{me: nameKey(o.me), meID: "-yo"}
 		for _, d := range plan.Import {
-			rep.inspect(d, src.translate(d))
+			t := src.translate(d)
+			rep.inspect(d, people.resolve(d, t))
 		}
 		rep.Write(out, true)
 		return nil
@@ -230,7 +240,7 @@ func run(ctx context.Context, o options, out io.Writer) error {
 		return errors.New("falta -user (uid de quien importa)")
 	}
 
-	ctx, client, closeConn, err := connect(ctx, o)
+	ctx, client, actorClient, closeConn, err := connect(ctx, o)
 	if err != nil {
 		return err
 	}
@@ -240,14 +250,23 @@ func run(ctx context.Context, o options, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	existing, err := existingIssues(ctx, client, project.GetId())
+	existing, assignees, err := existingIssues(ctx, client, project.GetId())
 	if err != nil {
 		return err
 	}
 	plan := MakePlan(docs, existing)
 	rep.Plan = plan
+	// Los actores se buscan antes de importar: la etiqueta responsable/ de
+	// un responsable sin cuenta va en el mismo ImportIssue (idempotente).
+	var people responsibles
+	if anyResponsible(plan.Import) {
+		if people, err = loadResponsibles(ctx, actorClient, o.user, o.me); err != nil {
+			return err
+		}
+	}
 	for _, d := range plan.Import {
-		req := rep.inspect(d, src.translate(d))
+		t := people.resolve(d, src.translate(d))
+		req := rep.inspect(d, t)
 		req.ProjectId = project.GetId()
 		callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		res, err := client.ImportIssue(callCtx, req)
@@ -264,6 +283,21 @@ func run(ctx context.Context, o options, out io.Writer) error {
 		default:
 			rep.Unchanged++
 		}
+		// CU-039-6: el responsable que coincide con un actor queda asignado.
+		// Solo si cambia (una corrida sin cambios no escribe); sin
+		// responsable o sin coincidencia, el asignado no se toca.
+		if t.AssigneeID == "" || assignees[d.Number] == t.AssigneeID {
+			continue
+		}
+		id := t.AssigneeID
+		callCtx, cancel = context.WithTimeout(ctx, 30*time.Second)
+		_, err = client.UpdateIssue(callCtx, &issuesv1.UpdateIssueRequest{ProjectId: project.GetId(), Number: d.Number, AssigneeActorId: &id})
+		cancel()
+		if err != nil {
+			rep.Failed = append(rep.Failed, Failure{Doc: d, Err: "asignar a " + t.AssigneeName + ": " + status.Convert(err).Message() + " (" + status.Code(err).String() + ")"})
+			continue
+		}
+		rep.Assigned = append(rep.Assigned, Finding{Doc: d, Value: t.AssigneeName})
 	}
 	rep.Write(out, false)
 	return nil
@@ -367,17 +401,17 @@ func findProject(ctx context.Context, client issuesv1.IssueServiceClient, src *s
 
 // connect abre el cliente gRPC (o usa o.client en los tests) y agrega a ctx
 // la identidad de quien importa. closeConn cierra la conexión.
-func connect(ctx context.Context, o options) (context.Context, issuesv1.IssueServiceClient, func(), error) {
-	client, closeConn := o.client, func() {}
+func connect(ctx context.Context, o options) (context.Context, issuesv1.IssueServiceClient, issuesv1.ActorServiceClient, func(), error) {
+	client, actors, closeConn := o.client, o.actors, func() {}
 	if client == nil {
 		conn, err := grpc.NewClient(o.addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("conectar a %s: %w", o.addr, err)
+			return nil, nil, nil, nil, fmt.Errorf("conectar a %s: %w", o.addr, err)
 		}
-		client, closeConn = issuesv1.NewIssueServiceClient(conn), func() { conn.Close() }
+		client, actors, closeConn = issuesv1.NewIssueServiceClient(conn), issuesv1.NewActorServiceClient(conn), func() { conn.Close() }
 	}
 	ctx = metadata.AppendToOutgoingContext(ctx, "x-user-id", o.user, "x-request-id", "import-round-"+time.Now().UTC().Format("20060102T150405Z"))
-	return ctx, client, closeConn, nil
+	return ctx, client, actors, closeConn, nil
 }
 
 // listIssues trae todos los issues del proyecto.
@@ -397,16 +431,19 @@ func listIssues(ctx context.Context, client issuesv1.IssueServiceClient, project
 	}
 }
 
-func existingIssues(ctx context.Context, client issuesv1.IssueServiceClient, projectID string) (Existing, error) {
+// existingIssues: número -> clave de origen y número -> asignado actual.
+func existingIssues(ctx context.Context, client issuesv1.IssueServiceClient, projectID string) (Existing, map[int32]string, error) {
 	issues, err := listIssues(ctx, client, projectID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	existing := Existing{}
+	assignees := map[int32]string{}
 	for _, it := range issues {
 		existing[it.GetNumber()] = it.GetSourceKey()
+		assignees[it.GetNumber()] = it.GetAssigneeActorId()
 	}
-	return existing, nil
+	return existing, assignees, nil
 }
 
 // Failure es un archivo que no se pudo leer o importar.
@@ -434,6 +471,13 @@ type translation struct {
 	Truncated   bool
 	// LabelsDropped: había más de MaxLabelsPerIssue etiquetas.
 	LabelsDropped bool
+
+	// Responsable (issue 039), lo completa responsibles.resolve.
+	// Responsible es el nombre del doc ("" si no hay).
+	Responsible string
+	// AssigneeID y AssigneeName: el actor que coincide ("" si ninguno).
+	AssigneeID   string
+	AssigneeName string
 }
 
 // translateRound traduce un issue de Round (§4 del issue 025).
@@ -442,9 +486,11 @@ func translateRound(d *Doc) translation {
 	t.State, t.StateKnown = MapState(d.RawState)
 	t.Priority, t.PriorityKnown = MapPriority(d.RawPriority)
 	t.CreatedAt, _ = ParseDate(d.RawDate)
+	var labels []string
 	if label := AreaLabel(d.RawArea); label != "" {
-		t.Labels = []string{label}
+		labels = append(labels, label)
 	}
+	t.Labels, t.LabelsDropped = addLabels(nil, append(labels, categoryLabels(d)...)...)
 	t.Description, t.Truncated = Description(d, sourceBaseURL+d.File)
 	return t
 }
@@ -457,8 +503,41 @@ func translateTemplate(d *Doc, repo, baseURL string) translation {
 	t.Priority, t.PriorityKnown = MapTemplatePriority(d.RawPriority)
 	t.CreatedAt, _ = ParseDate(d.RawDate)
 	t.Labels, t.LabelsDropped = TemplateLabels(d.RawLabels, blocked)
+	var dropped bool
+	t.Labels, dropped = addLabels(t.Labels, categoryLabels(d)...)
+	t.LabelsDropped = t.LabelsDropped || dropped
 	t.Description, t.Truncated = TemplateDescription(d, repo, baseURL)
 	return t
+}
+
+// categoryLabels son las etiquetas de los campos de categoría del doc.
+func categoryLabels(d *Doc) []string {
+	var out []string
+	for _, c := range d.RawCategories {
+		out = append(out, CategoryLabels(c.Prefix, c.Raw)...)
+	}
+	return out
+}
+
+// addLabels suma extra a labels sin vacías ni repetidas y hasta
+// MaxLabelsPerIssue (dropped = true si sobraron).
+func addLabels(labels []string, extra ...string) (out []string, dropped bool) {
+	out = labels
+	seen := map[string]bool{}
+	for _, l := range labels {
+		seen[l] = true
+	}
+	for _, l := range extra {
+		if l == "" || seen[l] {
+			continue
+		}
+		if len(out) == MaxLabelsPerIssue {
+			return out, true
+		}
+		seen[l] = true
+		out = append(out, l)
+	}
+	return out, false
 }
 
 // Report junta lo que pasó en la corrida.
@@ -485,6 +564,11 @@ type Report struct {
 	IDMismatch     []*Doc
 	TitleTruncated []*Doc
 	LabelsDropped  []*Doc
+	// Responsables (issue 039). Assigned: asignados en esta corrida (Value,
+	// el actor). NoAccount: sin actor que coincida (Value, el nombre): van
+	// con la etiqueta responsable/<nombre> y sin asignar.
+	Assigned  []Finding
+	NoAccount []Finding
 }
 
 // inspect arma el request de un issue ya traducido y anota lo que no se
@@ -517,6 +601,9 @@ func (r *Report) inspect(d *Doc, t translation) *issuesv1.ImportIssueRequest {
 	}
 	if len(t.Labels) == 0 {
 		r.NoLabels = append(r.NoLabels, d)
+	}
+	if t.Responsible != "" && t.AssigneeID == "" {
+		r.NoAccount = append(r.NoAccount, Finding{Doc: d, Value: t.Responsible})
 	}
 	return req
 }
@@ -607,6 +694,20 @@ func (r *Report) Write(w io.Writer, dryRun bool) {
 	if section("Etiquetas recortadas (más de 20: se quedan las primeras)", len(r.LabelsDropped)) {
 		for _, d := range r.LabelsDropped {
 			p("  %s", d.Path)
+		}
+	}
+	if section("Asignados por «Responsable:»", len(r.Assigned)) {
+		for _, f := range r.Assigned {
+			p("  %s-%d  %s  -> %s", r.Key, f.Doc.Number, f.Doc.Path, f.Value)
+		}
+	}
+	noAccount := "Responsable sin cuenta (etiqueta responsable/<nombre>, sin asignar)"
+	if dryRun {
+		noAccount += "; sin servicio no se buscan agentes"
+	}
+	if section(noAccount, len(r.NoAccount)) {
+		for _, f := range sortFindings(r.NoAccount) {
+			p("  %s  [%s]", f.Doc.Path, f.Value)
 		}
 	}
 	if section("Descripción recortada (más de 20000 caracteres)", len(r.Truncated)) {

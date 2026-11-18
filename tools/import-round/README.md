@@ -55,6 +55,7 @@ go run ./tools/import-round -formato template-docs -dir <repo> -user <uid> -proj
 | `estado`: `abierto` · `en-curso` · `bloqueado` · `resuelto` · `descartado` | Por hacer · En curso · En curso + etiqueta `bloqueado` · Hecho · Descartado |
 | `prioridad`: `alta` · `media` · `baja` | `HIGH` · `MEDIUM` · `LOW` |
 | `tipo`, `area`, `repos` | Etiquetas, en minúsculas y sin repetir (`bloqueado` va después de `tipo`). Más de 20: se quedan las primeras y se avisa |
+| `perfil`, `categoria` | Etiquetas `perfil/<valor>` y `categoria/<valor>` (issue 039). Texto `a, b` o lista YAML |
 | `creado` | Fecha de alta (solo al crear) |
 | `resuelto` | Línea «Resuelto: AAAA-MM-DD» al pie de la descripción. El contrato no tiene esa fecha |
 | Cuerpo | Descripción, sin el `# ` que repite el título, con enlace al `issue.md` en GitHub (rama `main`) y al `plan.md` si lo hay |
@@ -62,6 +63,22 @@ go run ./tools/import-round -formato template-docs -dir <repo> -user <uid> -proj
 El frontmatter abre con `---` y cierra con `---` o `...`. Solo se leen las
 carpetas `<número>-<slug>` de `contenido/issues`. ADRs,
 runbooks, índices y planes no se importan.
+
+## Categoría y responsable (issue 039)
+
+- **`Perfil:`** en la cabecera de Round (`> **Perfil:** escuela, familia`,
+  con o sin `>`) y `perfil` / `categoria` en el frontmatter de
+  template-docs: una etiqueta `<prefijo>/<valor>` por valor, en minúsculas,
+  sin acentos y con los espacios como `-` (`Admin Round` →
+  `perfil/admin-round`). Lo que sigue a `—` o `(` no cuenta. Son etiquetas
+  del importador: si el valor sale del doc, sale del issue.
+- **`Responsable:`** (Round): se compara, sin mayúsculas ni acentos, con los
+  agentes no revocados de quien importa. Si coincide, se asigna con
+  `UpdateIssue`, solo si cambia. Las personas no tienen nombre en Tekitla:
+  `-yo <nombre>` dice cómo nombran los docs a quien importa (p. ej.
+  `-yo Victor`), y ese responsable se le asigna. Si no coincide: etiqueta
+  `responsable/<nombre>`, sin asignar, y sale en el reporte (decisión de
+  Victor, 2026-11-18). Sin `Responsable:`, el asignado no se toca.
 
 ## Reporte
 
