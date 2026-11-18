@@ -159,9 +159,11 @@ Reglas de negocio no obvias:
   proyecto. Revocar no se deshace. La lectura pública
   (`ShareLinkService.resolve`): un token mal formado no toca la base; mal
   formado, desconocido, vencido o revocado → el mismo `NOT_FOUND` sin
-  detalle; un error de la base sale como error (5xx, no 404). Sin caché:
-  revocar corta el siguiente request. `last_used_at` se marca como mucho una
-  vez por minuto. Las respuestas son mensajes `Shared*` armados campo por
+  detalle; un error de la base sale como error (5xx, no 404). El enlace vale
+  mientras el proyecto siga en un espacio de quien lo creó
+  (`created_by_uid`). Sin caché: revocar corta el siguiente request.
+  `last_used_at` se marca como mucho una vez por minuto, a mejor esfuerzo
+  (si esa escritura falla, la lectura sigue). Las respuestas son mensajes `Shared*` armados campo por
   campo (`mapper/share_link_mapper.go`), sin ids internos, uids ni
   descartados (ni sus estados `CANCELED`). Con `plan`: sin descripción, solo
   `waiting_note` (`model.WaitingNote`, la misma regla que `waitingNote` del
@@ -421,7 +423,7 @@ git tag prod-v0.1.0 && git push origin prod-v0.1.0   # prod, automático salvo m
 
 ## Protos
 
-Repo de protos: `github.com/tekitla/tekitla-protos`, hoy en una pseudo-versión de la rama del 009 (pasa a `v0.9.0` antes del merge)
+Repo de protos: `github.com/tekitla/tekitla-protos`, hoy en `v0.9.0`
 (`go.mod`). Paquete Go `github.com/tekitla/tekitla-protos/gen/go/issues/v1`
 (alias `issuesv1`), usado solo en `handler/`, `mapper/` y `cli/main.go`.
 

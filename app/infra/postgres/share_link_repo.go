@@ -98,11 +98,6 @@ func (r *ShareLinkRepository) List(ctx context.Context, projectID string) ([]*mo
 	return out, nil
 }
 
-// Get devuelve un enlace del proyecto.
-func (r *ShareLinkRepository) Get(ctx context.Context, projectID, id string) (*model.ShareLink, error) {
-	return getShareLink(r.db.WithContext(ctx), projectID, id)
-}
-
 func getShareLink(db *gorm.DB, projectID, id string) (*model.ShareLink, error) {
 	var rows []shareLinkRow
 	err := db.Raw(`SELECT `+shareLinkColumns+` FROM issues.share_links l WHERE l.project_id = ? AND l.id = ?`,
@@ -127,57 +122,29 @@ func (r *ShareLinkRepository) Revoke(ctx context.Context, projectID, id string, 
 	return getShareLink(db, projectID, id)
 }
 
-// resolvedShareLinkRow es el resultado de Resolve: shareLinkRow más el
-// espacio del proyecto. Plano a propósito: GORM no llena un struct embebido
-// al escanear un Raw.
-type resolvedShareLinkRow struct {
-	ID               string
-	ProjectID        string
-	Scope            string
-	Note             string
-	OwnerDisplayName string
-	CreatedByUID     string
-	CreatedAt        time.Time
-	ExpiresAt        *time.Time
-	LastUsedAt       *time.Time
-	RevokedAt        *time.Time
-	WorkspaceID      string
-}
-
 // Resolve busca el enlace activo con ese hash (un SELECT por el índice único,
 // sin locks) y, si su último uso tiene más de lastUsedEvery, lo marca. No hay
 // caché: revocar corta el siguiente request.
-func (r *ShareLinkRepository) Resolve(ctx context.Context, hash []byte, now time.Time) (*model.ResolvedShareLink, error) {
+func (r *ShareLinkRepository) Resolve(ctx context.Context, hash []byte, now time.Time) (*model.ShareLink, error) {
 	db := r.db.WithContext(ctx)
-	var rows []resolvedShareLinkRow
-	err := db.Raw(
-		`SELECT `+shareLinkColumns+`, p.workspace_id
-		   FROM issues.share_links l
-		   JOIN issues.projects p ON p.id = l.project_id
-		  WHERE l.token_hash = ? AND `+shareLinkActive,
-		hash, now,
-	).Scan(&rows).Error
+	var rows []shareLinkRow
+	err := db.Raw(`SELECT `+shareLinkColumns+` FROM issues.share_links l WHERE l.token_hash = ? AND `+shareLinkActive,
+		hash, now).Scan(&rows).Error
 	if err != nil {
 		return nil, translateError(err, "share link", "resolve", nil)
 	}
 	if len(rows) == 0 {
 		return nil, domainerrors.NotFoundError("share link not found", nil)
 	}
-	row := rows[0]
-	if row.LastUsedAt == nil || now.Sub(*row.LastUsedAt) >= lastUsedEvery {
-		err := db.Exec(`UPDATE issues.share_links SET last_used_at = ?
-		                 WHERE id = ? AND (last_used_at IS NULL OR last_used_at <= ?)`,
-			now, row.ID, now.Add(-lastUsedEvery)).Error
-		if err != nil {
-			return nil, translateError(err, "share link", "resolve", nil)
-		}
+	link := fromShareLinkRow(&rows[0])
+	if link.LastUsedAt == nil || now.Sub(*link.LastUsedAt) >= lastUsedEvery {
+		// A mejor esfuerzo: el último uso es aproximado y una lectura pública
+		// no falla por no poder anotarlo.
+		_ = db.Exec(`UPDATE issues.share_links SET last_used_at = ?
+		             WHERE id = ? AND (last_used_at IS NULL OR last_used_at <= ?)`,
+			now, link.ID, now.Add(-lastUsedEvery)).Error
 	}
-	link := fromShareLinkRow(&shareLinkRow{
-		ID: row.ID, ProjectID: row.ProjectID, Scope: row.Scope, Note: row.Note, OwnerDisplayName: row.OwnerDisplayName,
-		CreatedByUID: row.CreatedByUID, CreatedAt: row.CreatedAt, ExpiresAt: row.ExpiresAt, LastUsedAt: row.LastUsedAt,
-		RevokedAt: row.RevokedAt,
-	})
-	return &model.ResolvedShareLink{Link: link, WorkspaceID: row.WorkspaceID}, nil
+	return link, nil
 }
 
 func fromShareLinkRow(r *shareLinkRow) *model.ShareLink {

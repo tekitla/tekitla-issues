@@ -76,13 +76,6 @@ func (l *ShareLink) IsActive(now time.Time) bool {
 	return l.RevokedAt == nil && (l.ExpiresAt == nil || now.Before(*l.ExpiresAt))
 }
 
-// ResolvedShareLink es un enlace activo resuelto por su token, con el
-// espacio de su proyecto (para leerlo con los repos de siempre).
-type ResolvedShareLink struct {
-	Link        *ShareLink
-	WorkspaceID string
-}
-
 // NormalizeShareNote recorta espacios y valida la nota (obligatoria).
 func NormalizeShareNote(raw string) (string, error) {
 	return requiredText("note", raw, ShareNoteMaxLen)

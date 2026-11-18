@@ -8,7 +8,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/joho/godotenv v1.5.1
-	github.com/tekitla/tekitla-protos v0.8.1-0.20261118224026-13de7a1aac0a
+	github.com/tekitla/tekitla-protos v0.9.0
 	go.uber.org/zap v1.27.1
 	golang.org/x/text v0.43.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260803160001-6ac0973c030d

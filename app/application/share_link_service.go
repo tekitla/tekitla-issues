@@ -129,13 +129,7 @@ func (s *ShareLinkService) RevokeShareLink(ctx context.Context, uid, projectID, 
 		return nil, err
 	}
 	projectID = canonical(projectID)
-	link, err := s.links.Get(ctx, projectID, linkID)
-	if err != nil {
-		return nil, err
-	}
-	if link.RevokedAt != nil {
-		return link, nil
-	}
+	// Revoke es idempotente y da NotFound si el enlace no es del proyecto.
 	return s.links.Revoke(ctx, projectID, linkID, s.now())
 }
 
@@ -151,28 +145,34 @@ type sharedProject struct {
 	project *model.Project
 }
 
-// resolve resuelve el token a su enlace activo y su proyecto. Un token que no
-// sirve (por la razón que sea) da errShareLinkNotFound; un error de la base
-// sale como error (el gateway responde 5xx, no 404).
+// resolve resuelve el token a su enlace activo y su proyecto. El enlace vale
+// mientras el proyecto siga en uno de los espacios de quien lo creó (si lo
+// pierde, en la rebanada 3, el enlace deja de andar). Un token que no sirve
+// (por la razón que sea) da errShareLinkNotFound; un error de la base sale
+// como error (el gateway responde 5xx, no 404).
 func (s *ShareLinkService) resolve(ctx context.Context, token string) (*sharedProject, error) {
 	if !model.LooksLikeShareToken(token) {
 		return nil, errShareLinkNotFound()
 	}
-	resolved, err := s.links.Resolve(ctx, HashToken(token), s.now())
+	link, err := s.links.Resolve(ctx, HashToken(token), s.now())
 	if domainerrors.IsNotFound(err) {
 		return nil, errShareLinkNotFound()
 	}
 	if err != nil {
 		return nil, err
 	}
-	project, err := s.guard.projects.GetByID(ctx, []string{resolved.WorkspaceID}, resolved.Link.ProjectID)
+	workspaceIDs, err := s.guard.workspaces.ids(ctx, link.CreatedByUID)
+	if err != nil {
+		return nil, err
+	}
+	project, err := s.guard.projects.GetByID(ctx, workspaceIDs, link.ProjectID)
 	if domainerrors.IsNotFound(err) {
 		return nil, errShareLinkNotFound()
 	}
 	if err != nil {
 		return nil, err
 	}
-	return &sharedProject{link: resolved.Link, project: project}, nil
+	return &sharedProject{link: link, project: project}, nil
 }
 
 // GetSharedProject devuelve el proyecto del enlace, su alcance, sus estados

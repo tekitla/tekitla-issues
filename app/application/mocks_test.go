@@ -364,9 +364,8 @@ func (m *mockFlowRepo) ListFlowIssues(ctx context.Context, projectID string, lab
 type mockShareLinkRepo struct {
 	createFn  func(ctx context.Context, link *model.ShareLink, hash []byte, maxActive int) (*model.ShareLink, error)
 	listFn    func(ctx context.Context, projectID string) ([]*model.ShareLink, error)
-	getFn     func(ctx context.Context, projectID, id string) (*model.ShareLink, error)
 	revokeFn  func(ctx context.Context, projectID, id string, at time.Time) (*model.ShareLink, error)
-	resolveFn func(ctx context.Context, hash []byte, now time.Time) (*model.ResolvedShareLink, error)
+	resolveFn func(ctx context.Context, hash []byte, now time.Time) (*model.ShareLink, error)
 }
 
 var _ port.ShareLinkRepository = (*mockShareLinkRepo)(nil)
@@ -385,13 +384,6 @@ func (m *mockShareLinkRepo) List(ctx context.Context, projectID string) ([]*mode
 	return m.listFn(ctx, projectID)
 }
 
-func (m *mockShareLinkRepo) Get(ctx context.Context, projectID, id string) (*model.ShareLink, error) {
-	if m.getFn == nil {
-		return nil, nil
-	}
-	return m.getFn(ctx, projectID, id)
-}
-
 func (m *mockShareLinkRepo) Revoke(ctx context.Context, projectID, id string, at time.Time) (*model.ShareLink, error) {
 	if m.revokeFn == nil {
 		return nil, nil
@@ -399,7 +391,7 @@ func (m *mockShareLinkRepo) Revoke(ctx context.Context, projectID, id string, at
 	return m.revokeFn(ctx, projectID, id, at)
 }
 
-func (m *mockShareLinkRepo) Resolve(ctx context.Context, hash []byte, now time.Time) (*model.ResolvedShareLink, error) {
+func (m *mockShareLinkRepo) Resolve(ctx context.Context, hash []byte, now time.Time) (*model.ShareLink, error) {
 	if m.resolveFn == nil {
 		return nil, nil
 	}

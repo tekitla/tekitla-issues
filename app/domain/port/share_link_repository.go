@@ -24,13 +24,12 @@ type ShareLinkRepository interface {
 	// List devuelve los enlaces del proyecto, los más nuevos primero (también
 	// los revocados y los vencidos).
 	List(ctx context.Context, projectID string) ([]*model.ShareLink, error)
-	// Get devuelve un enlace del proyecto.
-	Get(ctx context.Context, projectID, id string) (*model.ShareLink, error)
 	// Revoke revoca el enlace del proyecto en at. Uno ya revocado no cambia.
 	// Devuelve el enlace como queda.
 	Revoke(ctx context.Context, projectID, id string, at time.Time) (*model.ShareLink, error)
-	// Resolve busca el enlace activo en now con ese hash, actualiza su
-	// last_used_at (como mucho una vez por minuto) y lo devuelve con el
-	// espacio de su proyecto. NotFound en cualquier otro caso, sin decir cuál.
-	Resolve(ctx context.Context, hash []byte, now time.Time) (*model.ResolvedShareLink, error)
+	// Resolve busca el enlace activo en now con ese hash y lo devuelve.
+	// NotFound en cualquier otro caso, sin decir cuál. Marca last_used_at
+	// (como mucho una vez por minuto) a mejor esfuerzo: si esa escritura
+	// falla, el enlace se devuelve igual.
+	Resolve(ctx context.Context, hash []byte, now time.Time) (*model.ShareLink, error)
 }

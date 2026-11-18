@@ -72,15 +72,6 @@ func (s memShareLinks) get(projectID, id string) *model.ShareLink {
 	return nil
 }
 
-func (s memShareLinks) Get(_ context.Context, projectID, id string) (*model.ShareLink, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if l := s.get(projectID, id); l != nil {
-		return l, nil
-	}
-	return nil, domainerrors.NotFoundError("share link not found", nil)
-}
-
 func (s memShareLinks) Revoke(_ context.Context, projectID, id string, at time.Time) (*model.ShareLink, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -94,13 +85,13 @@ func (s memShareLinks) Revoke(_ context.Context, projectID, id string, at time.T
 	return l, nil
 }
 
-func (s memShareLinks) Resolve(_ context.Context, hash []byte, now time.Time) (*model.ResolvedShareLink, error) {
+func (s memShareLinks) Resolve(_ context.Context, hash []byte, now time.Time) (*model.ShareLink, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, l := range s.shareLinks {
 		if bytes.Equal(l.hash, hash) && l.link.IsActive(now) {
 			l.link.LastUsedAt = &now
-			return &model.ResolvedShareLink{Link: l.link, WorkspaceID: s.projects[l.link.ProjectID].WorkspaceID}, nil
+			return l.link, nil
 		}
 	}
 	return nil, domainerrors.NotFoundError("share link not found", nil)
