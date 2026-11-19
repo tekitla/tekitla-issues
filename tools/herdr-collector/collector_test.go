@@ -112,6 +112,26 @@ func TestTranslate(t *testing.T) {
 	}
 }
 
+// Un panel con textos largos no hace rechazar el reporte: se recortan a los
+// límites del contrato (el reporte es también el latido de la máquina).
+func TestTranslateClipsLongFields(t *testing.T) {
+	long := strings.Repeat("ñ", 300)
+	a := agent("s1", long, "blocked", `C:\dev\`+strings.Repeat("a", 600), "w1",
+		map[string]string{"espera_tipo": "sesion", "espera_a": long, "espera": long})
+	tooLongID := agent(strings.Repeat("x", 201), "", "idle", "", "w1", nil)
+	got := translate(testCfg, []herdrAgent{a, tooLongID}, map[string]string{"w1": long})
+	if len(got) != 1 {
+		t.Fatalf("got %d sessions, want 1 (id too long skipped)", len(got))
+	}
+	s := got[0]
+	runes := func(x string) int { return len([]rune(x)) }
+	if runes(s.GetSessionName()) != 200 || runes(s.GetWorkspaceLabel()) != 200 || runes(s.GetWaitingText()) != 200 ||
+		runes(s.GetWaitingTarget()) != 80 || s.GetCwdRel() != "" {
+		t.Errorf("clipped: name %d, ws %d, text %d, target %d, cwd %q", runes(s.GetSessionName()), runes(s.GetWorkspaceLabel()),
+			runes(s.GetWaitingText()), runes(s.GetWaitingTarget()), s.GetCwdRel())
+	}
+}
+
 func TestWaitingOfFallback(t *testing.T) {
 	cases := map[string]issuesv1.WaitingOn{
 		"🙋 decisión":       issuesv1.WaitingOn_WAITING_ON_PERSON,

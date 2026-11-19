@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	issuesv1 "github.com/tekitla/tekitla-protos/gen/go/issues/v1"
 )
@@ -76,7 +77,9 @@ func translate(cfg config, agents []herdrAgent, workspaces map[string]string) []
 	seen := map[string]bool{}
 	for _, a := range agents {
 		ext := a.AgentSession.Value
-		if ext == "" {
+		// Un id de más de 200 caracteres haría rechazar el reporte entero: esa
+		// sesión se saltea.
+		if ext == "" || utf8.RuneCountInString(ext) > 200 {
 			continue
 		}
 		if seen[ext] {
@@ -87,12 +90,13 @@ func translate(cfg config, agents []herdrAgent, workspaces map[string]string) []
 			ExternalId:     ext,
 			Tool:           toolOf(a.Agent),
 			CwdRel:         relCwd(cfg.root, a.Cwd),
-			SessionName:    a.Name,
-			WorkspaceLabel: workspaces[a.WorkspaceID],
+			SessionName:    clip(a.Name, 200),
+			WorkspaceLabel: clip(workspaces[a.WorkspaceID], 200),
 			Status:         statusOf(a.AgentStatus),
-			WaitingText:    a.Tokens["espera"],
+			WaitingText:    clip(a.Tokens["espera"], 200),
 		}
 		s.WaitingOn, s.WaitingTarget = waitingOf(a.Tokens)
+		s.WaitingTarget = clip(s.WaitingTarget, 80)
 		// Un panel que trabaja no espera (CU-026-12): el token puede ser de
 		// un turno anterior. El servicio aplica la misma regla.
 		if s.Status == issuesv1.SessionStatus_SESSION_STATUS_WORKING || s.Status == issuesv1.SessionStatus_SESSION_STATUS_ENDED {
@@ -102,6 +106,17 @@ func translate(cfg config, agents []herdrAgent, workspaces map[string]string) []
 		out = append(out, s)
 	}
 	return out
+}
+
+// clip recorta s a max runas (los límites de ReportedSession): un panel con
+// un texto largo no puede hacer rechazar el reporte de toda la máquina, que
+// además es el latido.
+func clip(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if utf8.RuneCountInString(s) <= max {
+		return s
+	}
+	return string([]rune(s)[:max])
 }
 
 func toolOf(agent string) issuesv1.AgentTool {
@@ -175,6 +190,9 @@ func relCwd(root, cwd string) string {
 		return ""
 	}
 	rel := c[len(r)+1:]
+	if utf8.RuneCountInString(rel) > 500 {
+		return ""
+	}
 	for _, seg := range strings.Split(rel, "/") {
 		if seg == ".." {
 			return ""
