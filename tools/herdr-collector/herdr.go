@@ -139,6 +139,11 @@ func statusOf(s string) issuesv1.SessionStatus {
 	case "idle":
 		return issuesv1.SessionStatus_SESSION_STATUS_IDLE
 	case "done":
+		// DECISIÓN PENDIENTE (Victor, plan del 026): en herdr `done` es
+		// «terminó su turno» con el panel abierto. Lo que dice el issue es
+		// terminada; la propuesta es en-reposo (SESSION_STATUS_IDLE), y
+		// terminada quedaría solo para los paneles que desaparecen del
+		// reporte. El cambio es esta línea y su caso en TestTranslate (s9).
 		return issuesv1.SessionStatus_SESSION_STATUS_ENDED
 	}
 	return issuesv1.SessionStatus_SESSION_STATUS_UNKNOWN
