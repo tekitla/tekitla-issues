@@ -3,7 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"path/filepath"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -180,8 +180,10 @@ func relCwd(root, cwd string) string {
 	if root == "" || cwd == "" {
 		return ""
 	}
-	r := filepath.ToSlash(filepath.Clean(root))
-	c := filepath.ToSlash(filepath.Clean(cwd))
+	// Las barras se normalizan a mano (no con filepath): herdr da rutas de
+	// Windows y el recolector se compila y se prueba también en Linux.
+	r := path.Clean(strings.ReplaceAll(root, `\`, "/"))
+	c := path.Clean(strings.ReplaceAll(cwd, `\`, "/"))
 	r = strings.TrimSuffix(r, "/")
 	if strings.EqualFold(c, r) {
 		return "."
