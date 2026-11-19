@@ -45,6 +45,7 @@ type memStore struct {
 	events     []*model.IssueEvent
 	actors     []*model.Actor
 	tokens     []*memToken
+	shareLinks []*memShareLink
 }
 
 func newMemStore() *memStore {
@@ -205,6 +206,8 @@ type clients struct {
 	actors   issuesv1.ActorServiceClient
 	auth     issuesv1.TokenAuthServiceClient
 	sessions issuesv1.AgentSessionServiceClient
+	share    issuesv1.ShareLinkServiceClient
+	shared   issuesv1.SharedProjectServiceClient
 	store    *memStore
 	// clock: el reloj del servicio de sesiones (los tests lo adelantan).
 	clock *testClock
@@ -237,6 +240,9 @@ func newClients(t *testing.T) clients {
 	issuesv1.RegisterActorServiceServer(srv, handler.NewActorHandler(zap.NewNop(), actorSvc))
 	issuesv1.RegisterTokenAuthServiceServer(srv, handler.NewTokenAuthHandler(zap.NewNop(), actorSvc))
 	issuesv1.RegisterAgentSessionServiceServer(srv, handler.NewAgentSessionHandler(zap.NewNop(), sessionSvc))
+	shareSvc := application.NewShareLinkService(workspaces, projects, memShareLinks{store}, issues, statuses, labels, actors)
+	issuesv1.RegisterShareLinkServiceServer(srv, handler.NewShareLinkHandler(zap.NewNop(), shareSvc))
+	issuesv1.RegisterSharedProjectServiceServer(srv, handler.NewSharedProjectHandler(zap.NewNop(), shareSvc))
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
 
@@ -255,6 +261,8 @@ func newClients(t *testing.T) clients {
 		sessions: issuesv1.NewAgentSessionServiceClient(conn),
 		store:    store,
 		clock:    clock,
+		share:    issuesv1.NewShareLinkServiceClient(conn),
+		shared:   issuesv1.NewSharedProjectServiceClient(conn),
 	}
 }
 

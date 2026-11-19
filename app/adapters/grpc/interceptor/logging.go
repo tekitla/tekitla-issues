@@ -29,6 +29,12 @@ var loggedMetadata = map[string]string{
 var secretMethods = map[string]bool{
 	"/issues.v1.TokenAuthService/ResolveToken": true,
 	"/issues.v1.ActorService/CreateToken":      true,
+	// Issue 009: el token de un enlace viaja en el request de las lecturas
+	// públicas y sale en la respuesta de CreateShareLink.
+	"/issues.v1.ShareLinkService/CreateShareLink":      true,
+	"/issues.v1.SharedProjectService/GetSharedProject": true,
+	"/issues.v1.SharedProjectService/ListSharedIssues": true,
+	"/issues.v1.SharedProjectService/GetSharedIssue":   true,
 }
 
 // UnaryLogger retorna un interceptor que loguea cada petición gRPC unaria.

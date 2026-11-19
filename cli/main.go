@@ -56,6 +56,7 @@ func main() {
 	tokenRepo := postgres.NewTokenRepository(infra.DB)
 	flowRepo := postgres.NewFlowRepository(infra.DB)
 	sessionRepo := postgres.NewAgentSessionRepository(infra.DB)
+	shareLinkRepo := postgres.NewShareLinkRepository(infra.DB)
 
 	// 4. Servicios de aplicación
 	projectSvc := application.NewProjectService(workspaceRepo, projectRepo)
@@ -65,12 +66,15 @@ func main() {
 	actorSvc := application.NewActorService(actorRepo, tokenRepo)
 	flowSvc := application.NewFlowService(workspaceRepo, projectRepo, labelRepo, flowRepo)
 	sessionSvc := application.NewAgentSessionService(workspaceRepo, actorRepo, sessionRepo, infra.Config.SessionStallAfter)
+	shareLinkSvc := application.NewShareLinkService(workspaceRepo, projectRepo, shareLinkRepo, issueRepo, statusRepo, labelRepo, actorRepo)
 
 	// 5. Handlers gRPC
 	issueHandler := handler.NewIssueHandler(infra.Logger, projectSvc, issueSvc, statusSvc, labelSvc, flowSvc).WithSessions(sessionSvc)
 	actorHandler := handler.NewActorHandler(infra.Logger, actorSvc)
 	tokenAuthHandler := handler.NewTokenAuthHandler(infra.Logger, actorSvc)
 	sessionHandler := handler.NewAgentSessionHandler(infra.Logger, sessionSvc)
+	shareLinkHandler := handler.NewShareLinkHandler(infra.Logger, shareLinkSvc)
+	sharedProjectHandler := handler.NewSharedProjectHandler(infra.Logger, shareLinkSvc)
 
 	// 6. Servidor gRPC
 	grpcServer := grpc.NewServer(
@@ -81,6 +85,8 @@ func main() {
 	issuesv1.RegisterAgentSessionServiceServer(grpcServer, sessionHandler)
 	// Interno: lo llama solo el gateway (el servicio no tiene puerto publicado).
 	issuesv1.RegisterTokenAuthServiceServer(grpcServer, tokenAuthHandler)
+	issuesv1.RegisterShareLinkServiceServer(grpcServer, shareLinkHandler)
+	issuesv1.RegisterSharedProjectServiceServer(grpcServer, sharedProjectHandler)
 
 	// Health: lo usan los probes de Cloud Run y el healthcheck de docker compose.
 	healthSrv := health.NewServer()

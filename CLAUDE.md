@@ -9,7 +9,8 @@ curso, hecho, descartado), orden manual por `rank`, etiquetas, comentarios e
 historial (rebanada 3a), descartar con motivo (issue 011), búsqueda, filtros
 y orden en la lista (012), color, límite WIP y columnas ocultas (013) y
 actores, agentes, tokens por actor, asignado e importación (025, ADR 0009 del
-repo docs) y sesiones de agentes que reporta el recolector de herdr (026).
+repo docs), enlaces de solo lectura (009) y sesiones de agentes que reporta
+el recolector de herdr (026).
 
 - **Contrato**: `issues.v1.IssueService` de `github.com/tekitla/tekitla-protos`
   (`gen/go/issues/v1`): proyectos, issues (`ListIssues`, `GetIssue`,
@@ -17,13 +18,17 @@ repo docs) y sesiones de agentes que reporta el recolector de herdr (026).
   estados (con `BatchUpdateStatuses`), etiquetas, `CreateComment`,
   `ListIssueEvents`, `ImportIssue`, `ImportIssueEvents` y `GetFlowMetrics`; `issues.v1.ActorService` (agentes y
   tokens), `issues.v1.AgentSessionService` (`ReportSessions`,
-  `ListAgentSessions`) e `issues.v1.TokenAuthService` (`ResolveToken`, interno). Los
+  `ListAgentSessions`, 026), `issues.v1.TokenAuthService` (`ResolveToken`,
+  interno), `issues.v1.ShareLinkService` (gestión de enlaces de solo
+  lectura) e `issues.v1.SharedProjectService` (lectura pública por el token
+  de un enlace, 009). Los
   comentarios del `.proto` son la especificación.
 - **Quién lo llama**: solo el `tekitla-gateway` (api-gateway), que autentica y
   propaga la identidad en la metadata gRPC `x-user-id` (además `x-roles` y
   `x-request-id`).
 - **Identidad**: todo RPC exige `x-user-id` no vacío (si no, `UNAUTHENTICATED`),
-  salvo `ResolveToken`. La lee el adapter (`handler/identity.go`) y la pasa
+  salvo `ResolveToken` y los tres de `SharedProjectService` (no la leen: el
+  proyecto sale del enlace). La lee el adapter (`handler/identity.go`) y la pasa
   como parámetro explícito (`ownerUID`) a la capa de aplicación; el dominio no
   lee el context. Con un token de agente el gateway manda además
   `x-agent-id`: las escrituras reciben un `model.Author` (persona + agente,
@@ -144,6 +149,31 @@ Reglas de negocio no obvias:
   `revoked_at` de sus tokens: dejan de valer porque `ResolveToken` mira la
   cadena. El interceptor nunca loguea el payload de `ResolveToken` ni de
   `CreateToken` (ni con `DEBUG`).
+- Enlaces de solo lectura (009, plan en el repo docs): `tks_` + 32 bytes
+  de `crypto/rand` en base64url; se guarda solo el SHA-256
+  (`issues.share_links.token_hash`) y el token sale una sola vez en
+  `CreateShareLinkResponse`. Alcance `plan` o `panel` (no cambia),
+  vencimiento de 7, 30 o 90 días o sin vencimiento (`model.ShareLinkExpiry`),
+  nota de 1 a 80 y `owner_display_name` de 0 a 40. Solo el dueño del
+  proyecto los gestiona (`projectGuard`; un agente → `PERMISSION_DENIED`);
+  un enlace de otro proyecto → `NOT_FOUND`. Tope de 20 activos por proyecto
+  (`FAILED_PRECONDITION` `SHARE_LINK_LIMIT`), contado con el lock del
+  proyecto. Revocar no se deshace. La lectura pública
+  (`ShareLinkService.resolve`): un token mal formado no toca la base; mal
+  formado, desconocido, vencido o revocado → el mismo `NOT_FOUND` sin
+  detalle; un error de la base sale como error (5xx, no 404). El enlace vale
+  mientras el proyecto siga en un espacio de quien lo creó
+  (`created_by_uid`). Sin caché: revocar corta el siguiente request.
+  `last_used_at` se marca como mucho una vez por minuto, a mejor esfuerzo
+  (si esa escritura falla, la lectura sigue). Las respuestas son mensajes `Shared*` armados campo por
+  campo (`mapper/share_link_mapper.go`), sin ids internos, uids ni
+  descartados (ni sus estados `CANCELED`). Con `plan`: sin descripción, solo
+  `waiting_note` (`model.WaitingNote`, la misma regla que `waitingNote` del
+  panel, CU-039-10) y `GetSharedIssue` → `NOT_FOUND`. El asignado persona
+  se muestra con `owner_display_name` si es quien creó el enlace; si no, sin
+  nombre. `TestSharedMessages_ClosedFieldList` fija los campos de los
+  mensajes públicos. El interceptor nunca loguea el payload de
+  `CreateShareLink` ni de las lecturas públicas.
 - Asignado (025): `issues.assignee_actor_id` nullable; asignar exige un
   actor visible (la persona o uno de sus agentes) y no revocado (si no,
   `INVALID_ARGUMENT`); puede quedar asignado a uno revocado. Evento
@@ -328,7 +358,8 @@ compose, ver `cli/healthcheck.go`) y reflection fuera de prod.
   `issues.statuses` (`color` 1..7, `wip_limit` ≥ 0, `hidden`), `issues.labels`,
   `issues.issue_labels` (`imported`), `issues.comments`, `issues.issue_events`
   (`agent_id`), `issues.actors`, `issues.tokens` (solo el hash; scopes
-  `issues:read`, `issues:write` y `sessions:write`) e `issues.agent_sessions`. Timestamps
+  `issues:read`, `issues:write` y `sessions:write`), `issues.share_links`
+  (solo el hash) e `issues.agent_sessions`. Timestamps
   truncados a microsegundos en el repo (`dbNow`).
 - JSONB: DTOs unexported separados del dominio + `encoding/json`.
 - Migraciones en `migrations/NNNNNN_desc.{up,down}.sql`, aplicadas a mano
@@ -343,8 +374,9 @@ compose, ver `cli/healthcheck.go`) y reflection fuera de prod.
   `000006` las del 036 (`source` y `source_ref` en `issue_events`, sin
   DEFAULT, e índice `(issue_id, created_at, seq)`) y `000007` la del 036
   parte 2 (`labels.counts_as_value`, `NOT NULL DEFAULT false`: ninguna etiqueta
-  existente es de valor) y `000009` la del 026 (`agent_sessions` y
-  `sessions:write` en el CHECK de `tokens.scopes`; `000008` es del 009). Marcar `import_sync` los
+  existente es de valor), `000008` la del 009 (`share_links`, tabla nueva)
+  y `000009` la del 026 (`agent_sessions` y `sessions:write` en el CHECK de
+  `tokens.scopes`). Marcar `import_sync` los
   eventos viejos de ImportIssue de un proyecto espejo (y alinear su
   «creado» con el alta) es aparte y revisable:
   `scripts/backfill_import_sync.sh <qa|prod> <uid> <clave> [--apply]` (sin
@@ -407,8 +439,10 @@ git tag prod-v0.1.0 && git push origin prod-v0.1.0   # prod, automático salvo m
   v0.5 y **tiene que** aplicarse antes del deploy de la imagen que la usa
   (escribe `source`). `000007` es compatible con el binario de v0.4 (el
   DEFAULT cubre sus INSERT) y también va antes del deploy (la imagen nueva
-  lee `labels.counts_as_value`). `000009` es compatible con el binario de
-  v0.9 (tabla nueva) y va antes del deploy de la imagen que la usa.
+  lee `labels.counts_as_value`). `000008` es compatible con cualquier
+  binario anterior (solo crea una tabla) y va antes del deploy de la imagen
+  que la usa. `000009` es compatible con el binario de v0.9 (tabla nueva) y
+  también va antes del deploy de la imagen que la usa.
 - Release con cambios en `migrations/`: la guarda de prod bloquea. Aplicar el
   SQL por túnel SSH (`scripts/apply_migration.sh prod <migración> --apply`) y
   lanzar el override.
