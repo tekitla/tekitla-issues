@@ -43,7 +43,11 @@ func (h *IssueHandler) UpdateIssue(ctx context.Context, req *issuesv1.UpdateIssu
 	if err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)
 	}
-	return &issuesv1.UpdateIssueResponse{Issue: mapper.IssueToProto(issue)}, nil
+	out := mapper.IssueToProto(issue)
+	if err := h.attachSessions(ctx, false, out); err != nil {
+		return nil, domainerrors.MapToGRPC(err, h.logger)
+	}
+	return &issuesv1.UpdateIssueResponse{Issue: out}, nil
 }
 
 func (h *IssueHandler) ListStatuses(ctx context.Context, req *issuesv1.ListStatusesRequest) (*issuesv1.ListStatusesResponse, error) {
@@ -143,7 +147,11 @@ func (h *IssueHandler) DiscardIssue(ctx context.Context, req *issuesv1.DiscardIs
 	if err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)
 	}
-	return &issuesv1.DiscardIssueResponse{Issue: mapper.IssueToProto(issue)}, nil
+	out := mapper.IssueToProto(issue)
+	if err := h.attachSessions(ctx, false, out); err != nil {
+		return nil, domainerrors.MapToGRPC(err, h.logger)
+	}
+	return &issuesv1.DiscardIssueResponse{Issue: out}, nil
 }
 
 func (h *IssueHandler) RestoreIssue(ctx context.Context, req *issuesv1.RestoreIssueRequest) (*issuesv1.RestoreIssueResponse, error) {
@@ -155,7 +163,11 @@ func (h *IssueHandler) RestoreIssue(ctx context.Context, req *issuesv1.RestoreIs
 	if err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)
 	}
-	return &issuesv1.RestoreIssueResponse{Issue: mapper.IssueToProto(issue)}, nil
+	out := mapper.IssueToProto(issue)
+	if err := h.attachSessions(ctx, false, out); err != nil {
+		return nil, domainerrors.MapToGRPC(err, h.logger)
+	}
+	return &issuesv1.RestoreIssueResponse{Issue: out}, nil
 }
 
 func (h *IssueHandler) ListLabels(ctx context.Context, req *issuesv1.ListLabelsRequest) (*issuesv1.ListLabelsResponse, error) {
@@ -274,7 +286,11 @@ func (h *IssueHandler) ImportIssue(ctx context.Context, req *issuesv1.ImportIssu
 	if err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)
 	}
-	return &issuesv1.ImportIssueResponse{Issue: mapper.IssueToProto(issue), Outcome: mapper.ImportOutcomeToProto(outcome)}, nil
+	out := mapper.IssueToProto(issue)
+	if err := h.attachSessions(ctx, false, out); err != nil {
+		return nil, domainerrors.MapToGRPC(err, h.logger)
+	}
+	return &issuesv1.ImportIssueResponse{Issue: out, Outcome: mapper.ImportOutcomeToProto(outcome)}, nil
 }
 
 // ImportIssueEvents agrega al historial de un issue importado eventos con su

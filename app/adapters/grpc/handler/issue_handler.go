@@ -28,6 +28,8 @@ type IssueHandler struct {
 	statusSvc  *application.StatusService
 	labelSvc   *application.LabelService
 	flowSvc    *application.FlowService
+	// sessionSvc: resumen de sesiones de agentes (WithSessions). Puede ser nil.
+	sessionSvc *application.AgentSessionService
 }
 
 var _ issuesv1.IssueServiceServer = (*IssueHandler)(nil)
@@ -122,8 +124,12 @@ func (h *IssueHandler) ListIssues(ctx context.Context, req *issuesv1.ListIssuesR
 	if err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)
 	}
+	issues := mapper.IssuesToProto(page.Issues)
+	if err := h.attachSessions(ctx, false, issues...); err != nil {
+		return nil, domainerrors.MapToGRPC(err, h.logger)
+	}
 	return &issuesv1.ListIssuesResponse{
-		Issues: mapper.IssuesToProto(page.Issues),
+		Issues: issues,
 		Page:   mapper.PageResponseToProto(page.NextCursor, page.HasNext),
 	}, nil
 }
@@ -137,7 +143,11 @@ func (h *IssueHandler) GetIssue(ctx context.Context, req *issuesv1.GetIssueReque
 	if err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)
 	}
-	return &issuesv1.GetIssueResponse{Issue: mapper.IssueToProto(issue)}, nil
+	out := mapper.IssueToProto(issue)
+	if err := h.attachSessions(ctx, true, out); err != nil {
+		return nil, domainerrors.MapToGRPC(err, h.logger)
+	}
+	return &issuesv1.GetIssueResponse{Issue: out}, nil
 }
 
 func (h *IssueHandler) CreateIssue(ctx context.Context, req *issuesv1.CreateIssueRequest) (*issuesv1.CreateIssueResponse, error) {
@@ -157,7 +167,11 @@ func (h *IssueHandler) CreateIssue(ctx context.Context, req *issuesv1.CreateIssu
 	if err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)
 	}
-	return &issuesv1.CreateIssueResponse{Issue: mapper.IssueToProto(issue)}, nil
+	out := mapper.IssueToProto(issue)
+	if err := h.attachSessions(ctx, false, out); err != nil {
+		return nil, domainerrors.MapToGRPC(err, h.logger)
+	}
+	return &issuesv1.CreateIssueResponse{Issue: out}, nil
 }
 
 func (h *IssueHandler) MoveIssue(ctx context.Context, req *issuesv1.MoveIssueRequest) (*issuesv1.MoveIssueResponse, error) {
@@ -175,5 +189,9 @@ func (h *IssueHandler) MoveIssue(ctx context.Context, req *issuesv1.MoveIssueReq
 	if err != nil {
 		return nil, domainerrors.MapToGRPC(err, h.logger)
 	}
-	return &issuesv1.MoveIssueResponse{Issue: mapper.IssueToProto(issue)}, nil
+	out := mapper.IssueToProto(issue)
+	if err := h.attachSessions(ctx, false, out); err != nil {
+		return nil, domainerrors.MapToGRPC(err, h.logger)
+	}
+	return &issuesv1.MoveIssueResponse{Issue: out}, nil
 }

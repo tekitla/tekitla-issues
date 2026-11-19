@@ -36,6 +36,7 @@ services:
       SERVICE_ENV: ${SERVICE_ENV:-production}
       DEBUG: ${DEBUG:-false}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      SESSION_STALL_AFTER: ${SESSION_STALL_AFTER:-10m}
       GRPC_PORT: "5000"
       # postgres://tekitla_issues:<pass>@<UUID-del-postgres-compartido>:5432/tekitla_issues?sslmode=disable
       # (ver docs/deploy.md; este servicio no la arma).

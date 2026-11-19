@@ -109,10 +109,15 @@ func TestActorService_CreateTokenValidation(t *testing.T) {
 		"over 90 days":   {Scopes: read, ExpiresAt: at(90*24*time.Hour + time.Second)},
 		"long name":      {Scopes: read, Name: strings.Repeat("x", 81)},
 		"actor not uuid": {Scopes: read, ActorID: "x"},
+		// 026: sessions:write solo en un token de persona.
+		"agent with sessions:write": {Scopes: []model.TokenScope{model.TokenScopeSessionsWrite}, ActorID: agentID},
 	} {
 		if _, _, err := svc.CreateToken(ctx, owner, in); !domainerrors.IsValidation(err) {
 			t.Errorf("%s: want validation, got %v", name, err)
 		}
+	}
+	if _, _, err := svc.CreateToken(ctx, owner, application.CreateTokenInput{Scopes: []model.TokenScope{model.TokenScopeSessionsWrite, model.TokenScopeIssuesRead}}); err != nil {
+		t.Errorf("person with sessions:write: %v", err)
 	}
 	if _, _, err := svc.CreateToken(ctx, owner, application.CreateTokenInput{Scopes: read, ActorID: otherAgent}); !domainerrors.IsNotFound(err) {
 		t.Errorf("someone else's agent: want not found, got %v", err)

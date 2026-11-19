@@ -86,11 +86,14 @@ type TokenScope string
 const (
 	TokenScopeIssuesRead  TokenScope = "issues:read"
 	TokenScopeIssuesWrite TokenScope = "issues:write"
+	// TokenScopeSessionsWrite: reportar sesiones de agentes (issue 026). No
+	// lee ni cambia issues.
+	TokenScopeSessionsWrite TokenScope = "sessions:write"
 )
 
 // tokenScopeOrder es el orden del enum proto: los scopes se guardan y se
 // devuelven así.
-var tokenScopeOrder = []TokenScope{TokenScopeIssuesRead, TokenScopeIssuesWrite}
+var tokenScopeOrder = []TokenScope{TokenScopeIssuesRead, TokenScopeIssuesWrite, TokenScopeSessionsWrite}
 
 // IsValid informa si el scope es uno de los definidos.
 func (s TokenScope) IsValid() bool { return slices.Contains(tokenScopeOrder, s) }

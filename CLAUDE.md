@@ -9,17 +9,19 @@ curso, hecho, descartado), orden manual por `rank`, etiquetas, comentarios e
 historial (rebanada 3a), descartar con motivo (issue 011), búsqueda, filtros
 y orden en la lista (012), color, límite WIP y columnas ocultas (013) y
 actores, agentes, tokens por actor, asignado e importación (025, ADR 0009 del
-repo docs) y enlaces de solo lectura (009).
+repo docs), enlaces de solo lectura (009) y sesiones de agentes que reporta
+el recolector de herdr (026).
 
 - **Contrato**: `issues.v1.IssueService` de `github.com/tekitla/tekitla-protos`
   (`gen/go/issues/v1`): proyectos, issues (`ListIssues`, `GetIssue`,
   `CreateIssue`, `MoveIssue`, `UpdateIssue`, `DiscardIssue`, `RestoreIssue`),
   estados (con `BatchUpdateStatuses`), etiquetas, `CreateComment`,
   `ListIssueEvents`, `ImportIssue`, `ImportIssueEvents` y `GetFlowMetrics`; `issues.v1.ActorService` (agentes y
-  tokens), `issues.v1.TokenAuthService` (`ResolveToken`, interno),
-  `issues.v1.ShareLinkService` (gestión de enlaces de solo lectura) e
-  `issues.v1.SharedProjectService` (lectura pública por el token de un
-  enlace, 009). Los
+  tokens), `issues.v1.AgentSessionService` (`ReportSessions`,
+  `ListAgentSessions`, 026), `issues.v1.TokenAuthService` (`ResolveToken`,
+  interno), `issues.v1.ShareLinkService` (gestión de enlaces de solo
+  lectura) e `issues.v1.SharedProjectService` (lectura pública por el token
+  de un enlace, 009). Los
   comentarios del `.proto` son la especificación.
 - **Quién lo llama**: solo el `tekitla-gateway` (api-gateway), que autentica y
   propaga la identidad en la metadata gRPC `x-user-id` (además `x-roles` y
@@ -179,6 +181,32 @@ Reglas de negocio no obvias:
   `assignee_actor_ids` O `unassigned`; un id que no es UUID no trae nada; el
   filtro entra en la huella del cursor solo si se usa (los cursores de v0.4
   siguen valiendo).
+- Sesiones de agentes (026, `000009`; el comentario de
+  `agent_session_service.proto` es la especificación):
+  - `ReportSessions` reemplaza las sesiones de una máquina (persona,
+    `source`, `machine`): idempotente por `external_id` (clave única), en una
+    transacción con advisory lock por máquina (`AgentSessionRepository.Report`
+    llama a `model.PlanReport` con lo guardado). Las que no vienen pasan a
+    `ended`; una `ended` que vuelve se reabre. `status_changed_at` cambia
+    solo si cambia el estado. Solo una persona (`x-agent-id` →
+    `PERMISSION_DENIED`); el permiso `sessions:write` lo exige el gateway.
+  - Con `working` (o `ended`) `waiting_on` se guarda `none` (CHECK
+    `agent_sessions_waiting_free_chk`). `cwd_rel` relativo: absoluto o con
+    `..` → `INVALID_ARGUMENT` (`model.NormalizeCwdRel`).
+  - Agente: uno por herramienta y máquina, «Claude Code PC-01»
+    (`model.AgentNameForSession`), buscado por dueño, herramienta y nombre
+    (`FindAgent`) y creado si no hay. Revocado → sus sesiones se rechazan
+    (`rejected`, `saved: false`) hasta que la persona cree otro con ese nombre.
+  - `project_key` desconocida → se guarda sin issue y sale en `rejected`
+    con `saved: true`.
+  - «Colgado» (`STALLED`) no se guarda: `working` con `last_seen_at` más
+    viejo que `SESSION_STALL_AFTER` (10 min). «Activa» = no `ended` y con
+    reporte en las últimas 24 h (`model.SessionActiveWindow`).
+  - `Issue.sessions`: `IssueHandler.attachSessions` (una consulta por
+    respuesta, índice parcial `agent_sessions_issue_idx`) con
+    `model.SummarizeSessions`; la lista (hasta 5) solo en `GetIssue`. Cuenta
+    las sesiones de cualquier persona del proyecto.
+  - Recolector local en `tools/herdr-collector` (ver su `README.md`).
 - `ImportIssue` (025): idempotente por `source_key` (única por proyecto),
   con el lock del proyecto. Crea con el número del origen
   (`ISSUE_NUMBER_TAKEN` si ya es de otro) y deja `next_issue_number` mayor;
@@ -329,8 +357,9 @@ compose, ver `cli/healthcheck.go`) y reflection fuera de prod.
   `CHECK`; `rank` `TEXT COLLATE "C"`; `discard_*` del descarte),
   `issues.statuses` (`color` 1..7, `wip_limit` ≥ 0, `hidden`), `issues.labels`,
   `issues.issue_labels` (`imported`), `issues.comments`, `issues.issue_events`
-  (`agent_id`), `issues.actors`, `issues.tokens` e `issues.share_links`
-  (solo el hash). Timestamps
+  (`agent_id`), `issues.actors`, `issues.tokens` (solo el hash; scopes
+  `issues:read`, `issues:write` y `sessions:write`), `issues.share_links`
+  (solo el hash) e `issues.agent_sessions`. Timestamps
   truncados a microsegundos en el repo (`dbNow`).
 - JSONB: DTOs unexported separados del dominio + `encoding/json`.
 - Migraciones en `migrations/NNNNNN_desc.{up,down}.sql`, aplicadas a mano
@@ -345,9 +374,9 @@ compose, ver `cli/healthcheck.go`) y reflection fuera de prod.
   `000006` las del 036 (`source` y `source_ref` en `issue_events`, sin
   DEFAULT, e índice `(issue_id, created_at, seq)`) y `000007` la del 036
   parte 2 (`labels.counts_as_value`, `NOT NULL DEFAULT false`: ninguna etiqueta
-  existente es de valor) y `000008` la del 009 (`share_links`, tabla nueva;
-  el 026 toma `000009`).
-  Marcar `import_sync` los
+  existente es de valor), `000008` la del 009 (`share_links`, tabla nueva)
+  y `000009` la del 026 (`agent_sessions` y `sessions:write` en el CHECK de
+  `tokens.scopes`). Marcar `import_sync` los
   eventos viejos de ImportIssue de un proyecto espejo (y alinear su
   «creado» con el alta) es aparte y revisable:
   `scripts/backfill_import_sync.sh <qa|prod> <uid> <clave> [--apply]` (sin
@@ -375,6 +404,7 @@ go run ./tools/import-round -user <uid> -addr localhost:5000 -create-project   #
 go run ./tools/import-round -formato template-docs -dir <repo de docs> -dry-run   # TK o VR según el repo; -project cambia la clave
 go run ./tools/import-round -historico -dry-run [-detalle]   # histórico de estados de Round desde git (036)
 go run ./tools/import-round -historico -user <uid> -addr localhost:5000   # lo carga con ImportIssueEvents (idempotente)
+go run ./tools/herdr-collector -dry-run -once -root C:\dev -projects round=RND,tekitla=TK   # sesiones de herdr (026), sin mandar
 grpcurl -plaintext localhost:5000 list   # con reflection (no prod)
 grpcurl -plaintext -H 'x-user-id: u1' -d '{"key":"TK","name":"Tekitla"}'   localhost:5000 issues.v1.IssueService/CreateProject
 # sin grpcurl local: docker run --rm --network issues-service_default #   fullstorydev/grpcurl:v1.9.3 -plaintext app:5000 list
@@ -383,7 +413,7 @@ grpcurl -plaintext -H 'x-user-id: u1' -d '{"key":"TK","name":"Tekitla"}'   local
 ## Deploy
 
 Configuración 12-factor: todo sale de variables de entorno (`app/infra/config`)
-y son **las mismas** en todos los destinos (`APP_ENV`, `SERVICE_ENV`, `DEBUG`,
+y son **las mismas** en todos los destinos (`APP_ENV`, `SERVICE_ENV`, `DEBUG`, `SESSION_STALL_AFTER`,
 `LOG_LEVEL`, `GRPC_PORT`, `DATABASE_URL`, `OTEL_*`). Una variable nueva se
 agrega en `.env.example`, `docker-compose.yml` y `docker-compose.coolify.yml` (+ panel de Coolify).
 
@@ -411,7 +441,8 @@ git tag prod-v0.1.0 && git push origin prod-v0.1.0   # prod, automático salvo m
   DEFAULT cubre sus INSERT) y también va antes del deploy (la imagen nueva
   lee `labels.counts_as_value`). `000008` es compatible con cualquier
   binario anterior (solo crea una tabla) y va antes del deploy de la imagen
-  que la usa.
+  que la usa. `000009` es compatible con el binario de v0.9 (tabla nueva) y
+  también va antes del deploy de la imagen que la usa.
 - Release con cambios en `migrations/`: la guarda de prod bloquea. Aplicar el
   SQL por túnel SSH (`scripts/apply_migration.sh prod <migración> --apply`) y
   lanzar el override.
@@ -423,7 +454,7 @@ git tag prod-v0.1.0 && git push origin prod-v0.1.0   # prod, automático salvo m
 
 ## Protos
 
-Repo de protos: `github.com/tekitla/tekitla-protos`, hoy en `v0.9.0`
+Repo de protos: `github.com/tekitla/tekitla-protos`, hoy en `v0.10.0`
 (`go.mod`). Paquete Go `github.com/tekitla/tekitla-protos/gen/go/issues/v1`
 (alias `issuesv1`), usado solo en `handler/`, `mapper/` y `cli/main.go`.
 

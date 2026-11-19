@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 )
@@ -27,6 +28,11 @@ type Config struct {
 
 	// Logging
 	LogLevel string
+
+	// SessionStallAfter: una sesión de agente que trabaja y no reporta hace
+	// más pasa a «colgado» (issue 026). SESSION_STALL_AFTER, duración de Go
+	// ("10m"); vacía o inválida = 10 minutos.
+	SessionStallAfter time.Duration
 
 	// OpenTelemetry (se exponen para el banner/logs; el exporter se cablea
 	// cuando el servicio lo necesite)
@@ -61,6 +67,8 @@ func Load() *Config {
 		DBSchema:    "issues",
 
 		LogLevel: getEnv("LOG_LEVEL", "info"),
+
+		SessionStallAfter: getEnvAsDuration("SESSION_STALL_AFTER", 10*time.Minute),
 
 		OtelExporterEndpoint: getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
 		OtelServiceName:      getEnv("OTEL_SERVICE_NAME", "issues-service"),
@@ -113,6 +121,15 @@ func getEnvAsBool(key string, fallback bool) bool {
 			return true
 		case "false", "0", "no", "n":
 			return false
+		}
+	}
+	return fallback
+}
+
+func getEnvAsDuration(key string, fallback time.Duration) time.Duration {
+	if value, ok := os.LookupEnv(key); ok {
+		if d, err := time.ParseDuration(value); err == nil && d > 0 {
+			return d
 		}
 	}
 	return fallback
