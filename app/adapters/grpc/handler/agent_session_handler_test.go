@@ -131,7 +131,7 @@ func (m *memSessions) List(_ context.Context, f port.AgentSessionFilter) (*port.
 			f.IssueNumber > 0 && s.IssueNumber != f.IssueNumber,
 			f.Unlinked && s.ProjectID != "",
 			f.AgentActorID != "" && s.AgentActorID != f.AgentActorID,
-			len(f.StoredStatuses) > 0 && !slices.Contains(f.StoredStatuses, s.Status),
+			!matchesStatus(f, s),
 			!f.ActiveSince.IsZero() && (s.Status == model.SessionEnded || s.LastSeenAt.Before(f.ActiveSince)):
 			continue
 		}
@@ -142,6 +142,17 @@ func (m *memSessions) List(_ context.Context, f port.AgentSessionFilter) (*port.
 		out[i] = m.withName(s)
 	}
 	return &port.AgentSessionPage{Sessions: out}, nil
+}
+
+// matchesStatus replica el filtro de estado del repo de Postgres.
+func matchesStatus(f port.AgentSessionFilter, s *model.AgentSession) bool {
+	if len(f.Statuses) == 0 && !f.Working && !f.Stalled {
+		return true
+	}
+	working := s.Status == model.SessionWorking
+	return slices.Contains(f.Statuses, s.Status) ||
+		(f.Working && working && !s.LastSeenAt.Before(f.StallBefore)) ||
+		(f.Stalled && working && s.LastSeenAt.Before(f.StallBefore))
 }
 
 func (m *memSessions) ListForIssues(_ context.Context, projectID string, numbers []int32, activeSince time.Time) ([]*model.AgentSession, error) {
@@ -414,9 +425,14 @@ func TestAgentSessions_RevokedAgent(t *testing.T) {
 	if _, err := c.actors.RevokeActor(ctx, &issuesv1.RevokeActorRequest{ActorId: got.GetAgentActorId()}); err != nil {
 		t.Fatalf("RevokeActor: %v", err)
 	}
-	res := report(t, c, ctx, "PC-01", reported("s2", "", 0, noLink, working))
-	if res.GetCreated() != 0 || len(res.GetRejected()) != 1 || res.GetRejected()[0].GetSaved() {
+	// s1 sigue en herdr: se rechaza pero no se termina (ni ella ni s2 se
+	// escriben).
+	res := report(t, c, ctx, "PC-01", reported("s1", "", 0, noLink, waiting), reported("s2", "", 0, noLink, working))
+	if res.GetCreated() != 0 || res.GetEnded() != 0 || len(res.GetRejected()) != 2 || res.GetRejected()[0].GetSaved() {
 		t.Errorf("revoked agent: %+v", res)
+	}
+	if s1 := onlySession(t, c, ctx, &issuesv1.ListAgentSessionsRequest{}); s1.GetStatus() != working {
+		t.Errorf("revoked agent: s1 must stay as it was, got %v", s1.GetStatus())
 	}
 	// Victor crea otro con el mismo nombre desde el panel: vuelve a reportar.
 	if _, err := c.actors.CreateAgent(ctx, &issuesv1.CreateAgentRequest{DisplayName: "Claude Code PC-01", Tool: issuesv1.AgentTool_AGENT_TOOL_CLAUDE_CODE}); err != nil {

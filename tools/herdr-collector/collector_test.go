@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -194,6 +195,27 @@ func TestCycle_ChangeAndHeartbeat(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "proyecto TK desconocido") {
 		t.Errorf("rejections not logged: %s", logs.String())
+	}
+}
+
+func TestCycle_CapsSessions(t *testing.T) {
+	clock := time.Now()
+	read := func(context.Context) ([]herdrAgent, map[string]string, error) {
+		var agents []herdrAgent
+		for i := 0; i < maxSessions+5; i++ {
+			agents = append(agents, agent("s"+strconv.Itoa(i), "", "idle", "", "w1", nil))
+		}
+		return agents, nil, nil
+	}
+	var got int
+	send := func(_ context.Context, req *issuesv1.ReportSessionsRequest) (*issuesv1.ReportSessionsResponse, error) {
+		got = len(req.GetSessions())
+		return &issuesv1.ReportSessionsResponse{}, nil
+	}
+	c, logs := newTestCollector(read, send, &clock)
+	c.cycle(context.Background())
+	if got != maxSessions || !strings.Contains(logs.String(), "tope") {
+		t.Errorf("sent %d sessions, logs %q", got, logs.String())
 	}
 }
 

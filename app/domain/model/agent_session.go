@@ -330,8 +330,9 @@ type SessionAgent struct {
 // PlanReport compara las sesiones guardadas de una máquina (existing, todas,
 // también las terminadas) con el reporte (ya normalizado, con ProjectID
 // resuelto) y decide qué escribir. newID da el id de una sesión nueva y
-// agents el agente de cada herramienta (las sesiones cuya herramienta no
-// está en agents se saltean: el servicio ya las anotó como rechazadas).
+// agents el agente de cada herramienta. Las sesiones cuya herramienta no
+// está en agents (el servicio ya las anotó como rechazadas) no se escriben
+// ni se terminan: la guardada queda como estaba.
 func PlanReport(key SessionKey, existing []*AgentSession, reported []ReportedSession, agents map[AgentTool]SessionAgent, now time.Time, newID func() string) ReportOutcome {
 	byExt := make(map[string]*AgentSession, len(existing))
 	for _, e := range existing {
@@ -340,11 +341,13 @@ func PlanReport(key SessionKey, existing []*AgentSession, reported []ReportedSes
 	var out ReportOutcome
 	inReport := make(map[string]bool, len(reported))
 	for _, r := range reported {
+		// Vino en el reporte aunque no se pueda guardar (agente revocado):
+		// no se termina, solo no se actualiza.
+		inReport[r.ExternalID] = true
 		agent, ok := agents[r.Tool]
 		if !ok {
 			continue
 		}
-		inReport[r.ExternalID] = true
 		prev := byExt[r.ExternalID]
 		next := &AgentSession{
 			OwnerActorID:     key.OwnerActorID,

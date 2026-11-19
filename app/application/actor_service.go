@@ -159,6 +159,13 @@ func (s *ActorService) CreateToken(ctx context.Context, uid string, in CreateTok
 	if err != nil {
 		return nil, "", err
 	}
+	// sessions:write es del recolector, que reporta como la persona:
+	// ReportSessions rechaza los tokens de agente, así que uno así no
+	// serviría nunca (issue 026).
+	if actor.Kind == model.ActorKindAgent && slices.Contains(scopes, model.TokenScopeSessionsWrite) {
+		return nil, "", domainerrors.ValidationError("sessions:write is only for a person token", map[string]any{"field": "scopes"}).
+			WithReason("SESSIONS_SCOPE_NEEDS_PERSON")
+	}
 	expires, err := model.TokenExpiry(now, in.ExpiresAt)
 	if err != nil {
 		return nil, "", err

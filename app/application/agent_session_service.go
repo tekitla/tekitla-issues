@@ -232,25 +232,28 @@ func (s *AgentSessionService) List(ctx context.Context, uid string, in ListSessi
 			return nil, err
 		}
 	}
-	// STALLED es WORKING con last_seen_at viejo: se piden los WORKING y se
-	// filtra después. Con WORKING sin STALLED, igual (se quitan las colgadas).
-	wantStalled := slices.Contains(in.Statuses, model.SessionStalled)
-	wantWorking := slices.Contains(in.Statuses, model.SessionWorking)
+	// STALLED y WORKING se separan por last_seen_at en el repo.
 	for _, st := range in.Statuses {
 		if !st.IsValid() {
 			return nil, domainerrors.ValidationError("invalid status", map[string]any{"field": "statuses", "value": string(st)})
 		}
-		if st == model.SessionEnded && !in.IncludeInactive {
-			return nil, domainerrors.ValidationError("ENDED needs include_inactive", map[string]any{"field": "statuses"})
-		}
-		stored := st
-		if st == model.SessionStalled {
-			stored = model.SessionWorking
-		}
-		if !slices.Contains(f.StoredStatuses, stored) {
-			f.StoredStatuses = append(f.StoredStatuses, stored)
+		switch st {
+		case model.SessionEnded:
+			if !in.IncludeInactive {
+				return nil, domainerrors.ValidationError("ENDED needs include_inactive", map[string]any{"field": "statuses"})
+			}
+			f.Statuses = append(f.Statuses, st)
+		case model.SessionWorking:
+			f.Working = true
+		case model.SessionStalled:
+			f.Stalled = true
+		default:
+			if !slices.Contains(f.Statuses, st) {
+				f.Statuses = append(f.Statuses, st)
+			}
 		}
 	}
+	f.StallBefore = now.Add(-s.stallAfter)
 	if !in.IncludeInactive {
 		f.ActiveSince = now.Add(-model.SessionActiveWindow)
 	}
@@ -263,19 +266,9 @@ func (s *AgentSessionService) List(ctx context.Context, uid string, in ListSessi
 	if err != nil {
 		return nil, err
 	}
-	filterStalled := len(in.Statuses) > 0 && wantStalled != wantWorking
-	kept := page.Sessions[:0]
 	for _, ss := range page.Sessions {
 		ss.Status = ss.EffectiveStatus(now, s.stallAfter)
-		if filterStalled && ss.Status == model.SessionStalled && !wantStalled {
-			continue
-		}
-		if filterStalled && ss.Status == model.SessionWorking && !wantWorking {
-			continue
-		}
-		kept = append(kept, ss)
 	}
-	page.Sessions = kept
 	return page, nil
 }
 

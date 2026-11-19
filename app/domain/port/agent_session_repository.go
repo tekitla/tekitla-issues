@@ -36,9 +36,14 @@ type AgentSessionFilter struct {
 	IssueNumber  int32
 	AgentActorID string
 	Unlinked     bool
-	// StoredStatuses: estados guardados a traer (vacío = todos). STALLED se
-	// resuelve en el servicio: pide WORKING y filtra después.
-	StoredStatuses []model.SessionStatus
+	// Statuses: estados a traer (vacío = todos), sin WORKING ni STALLED, que
+	// van en Working y Stalled.
+	Statuses []model.SessionStatus
+	// Working: WORKING con reporte desde StallBefore. Stalled: WORKING con
+	// reporte anterior a StallBefore (colgadas). Solo cuentan si hay algún
+	// filtro de estado (Statuses, Working o Stalled).
+	Working, Stalled bool
+	StallBefore      time.Time
 	// ActiveSince: sin terminadas y con last_seen_at desde acá. Cero = todas.
 	ActiveSince time.Time
 	Page        PageFilter

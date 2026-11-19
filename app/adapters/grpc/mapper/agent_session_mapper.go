@@ -37,6 +37,21 @@ var sessionLinkFrom = map[issuesv1.SessionLink]model.SessionLink{
 	issuesv1.SessionLink_SESSION_LINK_CWD:        model.SessionLinkCwd,
 }
 
+// Mapas inversos, armados una vez.
+var (
+	sessionStatusTo = invert(sessionStatusFrom)
+	waitingOnTo     = invert(waitingOnFrom)
+	sessionLinkTo   = invert(sessionLinkFrom)
+)
+
+func invert[K comparable, V comparable](m map[K]V) map[V]K {
+	out := make(map[V]K, len(m))
+	for k, v := range m {
+		out[v] = k
+	}
+	return out
+}
+
 // SessionStatusFromProto convierte un estado.
 func SessionStatusFromProto(s issuesv1.SessionStatus) model.SessionStatus {
 	if v, ok := sessionStatusFrom[s]; ok {
@@ -47,31 +62,16 @@ func SessionStatusFromProto(s issuesv1.SessionStatus) model.SessionStatus {
 
 // SessionStatusToProto convierte un estado del dominio.
 func SessionStatusToProto(s model.SessionStatus) issuesv1.SessionStatus {
-	for k, v := range sessionStatusFrom {
-		if v == s {
-			return k
-		}
-	}
-	return issuesv1.SessionStatus_SESSION_STATUS_UNSPECIFIED
+	return sessionStatusTo[s] // ausente: UNSPECIFIED (0)
 }
 
 // WaitingOnToProto convierte qué espera una sesión.
 func WaitingOnToProto(w model.WaitingOn) issuesv1.WaitingOn {
-	for k, v := range waitingOnFrom {
-		if v == w && v != "" {
-			return k
-		}
-	}
-	return issuesv1.WaitingOn_WAITING_ON_UNSPECIFIED
+	return waitingOnTo[w] // "" y ausente: UNSPECIFIED (0)
 }
 
 func sessionLinkToProto(l model.SessionLink) issuesv1.SessionLink {
-	for k, v := range sessionLinkFrom {
-		if v == l {
-			return k
-		}
-	}
-	return issuesv1.SessionLink_SESSION_LINK_UNSPECIFIED
+	return sessionLinkTo[l] // ausente: UNSPECIFIED (0)
 }
 
 func sessionSourceToProto(s model.SessionSource) issuesv1.SessionSource {

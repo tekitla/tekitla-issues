@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -129,12 +130,16 @@ func (r *AgentSessionRepository) Report(ctx context.Context, key model.SessionKe
 			existing[i] = fromSessionRow(&rows[i])
 		}
 		out = plan(existing)
-		for _, s := range out.Upserts {
-			row := toSessionRow(s)
+		if len(out.Upserts) > 0 {
+			// Un solo INSERT … ON CONFLICT para todo el reporte (hasta 200).
+			rows := make([]*agentSessionRow, len(out.Upserts))
+			for i, s := range out.Upserts {
+				rows[i] = toSessionRow(s)
+			}
 			err := tx.Clauses(clause.OnConflict{
 				Columns:   []clause.Column{{Name: "owner_actor_id"}, {Name: "source"}, {Name: "machine"}, {Name: "external_id"}},
 				DoUpdates: clause.AssignmentColumns(sessionUpsertColumns),
-			}).Omit("agent_display_name").Create(row).Error
+			}).Omit("agent_display_name").Create(&rows).Error
 			if err != nil {
 				return err
 			}
@@ -178,13 +183,27 @@ func (r *AgentSessionRepository) List(ctx context.Context, f port.AgentSessionFi
 		q += ` AND s.agent_actor_id = ?`
 		args = append(args, f.AgentActorID)
 	}
-	if len(f.StoredStatuses) > 0 {
-		statuses := make([]string, len(f.StoredStatuses))
-		for i, s := range f.StoredStatuses {
-			statuses[i] = string(s)
+	if len(f.Statuses) > 0 || f.Working || f.Stalled {
+		// El estado efectivo en SQL: así el LIMIT y el cursor cuentan solo
+		// las filas que se devuelven.
+		var ors []string
+		if len(f.Statuses) > 0 {
+			statuses := make([]string, len(f.Statuses))
+			for i, s := range f.Statuses {
+				statuses[i] = string(s)
+			}
+			ors = append(ors, `s.status IN ?`)
+			args = append(args, statuses)
 		}
-		q += ` AND s.status IN ?`
-		args = append(args, statuses)
+		if f.Working {
+			ors = append(ors, `(s.status = 'working' AND s.last_seen_at >= ?)`)
+			args = append(args, f.StallBefore)
+		}
+		if f.Stalled {
+			ors = append(ors, `(s.status = 'working' AND s.last_seen_at < ?)`)
+			args = append(args, f.StallBefore)
+		}
+		q += ` AND (` + strings.Join(ors, " OR ") + `)`
 	}
 	if !f.ActiveSince.IsZero() {
 		q += ` AND s.status <> 'ended' AND s.last_seen_at >= ?`

@@ -180,7 +180,8 @@ func TestAgentSessionService_List_Filters(t *testing.T) {
 		t.Fatalf("List: %v", err)
 	}
 	if got.ProjectID != "6f9619ff-8b86-d011-b42d-00cf4fc964ff" || got.IssueNumber != 26 || got.ActiveSince.IsZero() ||
-		len(got.StoredStatuses) != 2 || got.StoredStatuses[0] != model.SessionWorking || got.Page.Limit != application.DefaultPageLimit {
+		!got.Stalled || got.Working || len(got.Statuses) != 1 || got.Statuses[0] != model.SessionIdle ||
+		!got.StallBefore.Equal(got.ActiveSince.Add(model.SessionActiveWindow-model.DefaultSessionStallAfter)) || got.Page.Limit != application.DefaultPageLimit {
 		t.Errorf("filter: %+v", got)
 	}
 	bad := []application.ListSessionsInput{

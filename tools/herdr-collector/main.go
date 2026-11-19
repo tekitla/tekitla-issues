@@ -28,6 +28,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"google.golang.org/protobuf/encoding/protojson"
@@ -36,7 +37,11 @@ import (
 	issuesv1 "github.com/tekitla/tekitla-protos/gen/go/issues/v1"
 )
 
-const reportPath = "/v1/agentSessions:report"
+const (
+	reportPath = "/v1/agentSessions:report"
+	// maxSessions es el tope de ReportSessionsRequest.sessions.
+	maxSessions = 200
+)
 
 func main() {
 	var (
@@ -73,7 +78,7 @@ func main() {
 	}
 
 	c := &collector{cfg: cfg, machine: *machine, read: herdrReader(*herdrBin), send: send, heartbeat: *heartbeat, logger: logger, now: time.Now}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	c.cycle(ctx)
 	if *once {
@@ -119,10 +124,17 @@ func (c *collector) cycle(ctx context.Context) {
 		c.logger.Printf("no se pudo leer herdr (se reintenta): %v", err)
 		return
 	}
+	sessions := translate(c.cfg, agents, workspaces)
+	if len(sessions) > maxSessions {
+		// Más que el tope del contrato haría rechazar el reporte entero (y el
+		// latido): se mandan las primeras.
+		c.logger.Printf("herdr tiene %d sesiones: se mandan %d (tope de ReportSessions)", len(sessions), maxSessions)
+		sessions = sessions[:maxSessions]
+	}
 	req := &issuesv1.ReportSessionsRequest{
 		Source:   issuesv1.SessionSource_SESSION_SOURCE_HERDR,
 		Machine:  c.machine,
-		Sessions: translate(c.cfg, agents, workspaces),
+		Sessions: sessions,
 	}
 	b, err := proto.MarshalOptions{Deterministic: true}.Marshal(req)
 	if err != nil {
