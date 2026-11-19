@@ -136,15 +136,12 @@ func statusOf(s string) issuesv1.SessionStatus {
 		return issuesv1.SessionStatus_SESSION_STATUS_WORKING
 	case "blocked":
 		return issuesv1.SessionStatus_SESSION_STATUS_WAITING_OK
-	case "idle":
+	case "idle", "done":
+		// En herdr `done` es «terminó su turno» con el panel abierto: en
+		// reposo (decisión de Victor, 2026-11-18, plan del 026). «Terminada»
+		// es solo para los paneles que desaparecen del reporte (lo hace el
+		// servicio).
 		return issuesv1.SessionStatus_SESSION_STATUS_IDLE
-	case "done":
-		// DECISIÓN PENDIENTE (Victor, plan del 026): en herdr `done` es
-		// «terminó su turno» con el panel abierto. Lo que dice el issue es
-		// terminada; la propuesta es en-reposo (SESSION_STATUS_IDLE), y
-		// terminada quedaría solo para los paneles que desaparecen del
-		// reporte. El cambio es esta línea y su caso en TestTranslate (s9).
-		return issuesv1.SessionStatus_SESSION_STATUS_ENDED
 	}
 	return issuesv1.SessionStatus_SESSION_STATUS_UNKNOWN
 }

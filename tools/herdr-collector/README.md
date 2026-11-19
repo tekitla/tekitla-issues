@@ -36,8 +36,10 @@ Cada ciclo corre `herdr agent list` y `herdr workspace list` y arma la lista
 completa de la máquina. La manda si cambió algo o si pasó el latido. El
 servicio pasa a terminada toda sesión de la máquina que no venga.
 
-- **Estado:** `working` → trabajando, `blocked` → esperando-ok, `idle` →
-  en-reposo, `done` → terminada, otro → desconocido.
+- **Estado:** `working` → trabajando, `blocked` → esperando-ok, `idle` y
+  `done` → en-reposo (en herdr, `done` es «terminó su turno» con el panel
+  abierto; decisión de Victor, 2026-11-18), otro → desconocido.
+  «Terminada» la pone el servicio cuando el panel deja de aparecer.
 - **Qué espera** (tokens de `espera.ps1`): `espera_tipo` = `persona`,
   `sesion` (con `espera_a`) u `otro`. Sin `espera_tipo`, el respaldo mira el
   texto de `espera`: `🙋` → persona, `⏳ espera a <X>` → sesión `<X>`, otro →

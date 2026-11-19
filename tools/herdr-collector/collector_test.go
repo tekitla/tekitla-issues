@@ -93,7 +93,8 @@ func TestTranslate(t *testing.T) {
 		"s6": {"", 0, noneL, "", issuesv1.SessionStatus_SESSION_STATUS_WAITING_OK, issuesv1.WaitingOn_WAITING_ON_SESSION, "Round"},
 		"s7": {"TK", 26, issuesv1.SessionLink_SESSION_LINK_WORKSPACE, "otro/worktrees/issue-9", issuesv1.SessionStatus_SESSION_STATUS_IDLE, none, ""},
 		"s8": {"DP", 12, cwdL, "dev-plantillas-wt/issue-12/base", issuesv1.SessionStatus_SESSION_STATUS_UNKNOWN, none, ""},
-		"s9": {"", 0, noneL, "otro/worktrees/issue-3", issuesv1.SessionStatus_SESSION_STATUS_ENDED, none, ""},
+		// done → en reposo: el panel sigue abierto (decisión de Victor).
+		"s9": {"", 0, noneL, "otro/worktrees/issue-3", issuesv1.SessionStatus_SESSION_STATUS_IDLE, none, ""},
 	}
 	for ext, w := range cases {
 		s := got[ext]
@@ -130,6 +131,16 @@ func TestTranslateClipsLongFields(t *testing.T) {
 		runes(s.GetWaitingTarget()) != 80 || s.GetCwdRel() != "" {
 		t.Errorf("clipped: name %d, ws %d, text %d, target %d, cwd %q", runes(s.GetSessionName()), runes(s.GetWorkspaceLabel()),
 			runes(s.GetWaitingText()), runes(s.GetWaitingTarget()), s.GetCwdRel())
+	}
+}
+
+// done con espera: la sesión que terminó su turno y pregunta sigue viva y
+// espera a su persona (antes salía terminada y sin espera).
+func TestDoneKeepsWaiting(t *testing.T) {
+	a := agent("s1", "tekitla-issue-26", "done", "", "w1", map[string]string{"espera_tipo": "persona", "espera": "🙋 decisión"})
+	s := translate(testCfg, []herdrAgent{a}, nil)[0]
+	if s.GetStatus() != issuesv1.SessionStatus_SESSION_STATUS_IDLE || s.GetWaitingOn() != issuesv1.WaitingOn_WAITING_ON_PERSON || s.GetWaitingText() != "🙋 decisión" {
+		t.Errorf("done con espera: %+v", s)
 	}
 }
 
