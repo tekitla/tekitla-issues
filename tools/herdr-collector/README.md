@@ -44,6 +44,10 @@ servicio pasa a terminada toda sesión de la máquina que no venga.
   `sesion` (con `espera_a`) u `otro`. Sin `espera_tipo`, el respaldo mira el
   texto de `espera`: `🙋` → persona, `⏳ espera a <X>` → sesión `<X>`, otro →
   otra cosa. Una sesión que trabaja no espera nada.
+- **Para qué espera** (issue 036, token `espera_motivo` de
+  `espera.ps1 -Motivo`): `revision`, `pruebas`, `decision` o `deploy`. Se
+  manda solo si la sesión espera algo. Un valor desconocido va sin motivo y
+  no hace fallar el reporte. Define el perfil de la señal de contratación.
 - **Issue** (la primera regla que reconoce, con el proyecto en `-projects`):
   nombre del agente `<proyecto>-issue-<n>`, workspace `<proyecto> #<n>`, o
   `cwd` con `worktrees/issue-<n>` o `<repo>-wt/issue-<n>` (el proyecto es la

@@ -241,8 +241,10 @@ func newClients(t *testing.T) clients {
 		application.NewLabelService(workspaces, projects, labels),
 		// Reloj un minuto adelante: con el de Windows (~1 ms) el «ahora» puede
 		// ser igual a la fecha de los eventos recién creados, y to es exclusivo.
+		// Es el reloj de las sesiones (036): los tests de eficiencia lo
+		// adelantan.
 		application.NewFlowService(workspaces, projects, labels, memFlow{store}).
-			WithClock(func() time.Time { return time.Now().UTC().Add(time.Minute) }),
+			WithClock(func() time.Time { return clock.now().Add(time.Minute) }),
 	).WithSessions(sessionSvc)
 
 	lis := bufconn.Listen(1 << 20)

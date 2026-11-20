@@ -69,7 +69,7 @@ func main() {
 	statusSvc := application.NewStatusService(workspaceRepo, projectRepo, statusRepo, actorRepo)
 	labelSvc := application.NewLabelService(workspaceRepo, projectRepo, labelRepo)
 	actorSvc := application.NewActorService(actorRepo, tokenRepo)
-	flowSvc := application.NewFlowService(workspaceRepo, projectRepo, labelRepo, flowRepo)
+	flowSvc := application.NewFlowService(workspaceRepo, projectRepo, labelRepo, flowRepo).WithStallAfter(infra.Config.SessionStallAfter)
 	sessionSvc := application.NewAgentSessionService(workspaceRepo, actorRepo, sessionRepo, infra.Config.SessionStallAfter)
 	shareLinkSvc := application.NewShareLinkService(workspaceRepo, projectRepo, shareLinkRepo, issueRepo, statusRepo, labelRepo, actorRepo)
 	integrationSvc := application.NewIntegrationService(workspaceRepo, projectRepo, integrationRepo, githubApp(infra.Config, infra.Logger))
