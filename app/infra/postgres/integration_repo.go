@@ -418,8 +418,12 @@ func (r *IntegrationRepository) ListLinks(ctx context.Context, projectID string,
 		return scanLinks(db, `i.project_id = ? AND i.number = ? AND NOT l.suppressed
 		  ORDER BY l.updated_at DESC, l.id LIMIT ?`, projectID, issueNumber, limit)
 	}
-	return scanLinks(db, `i.project_id = ? AND i.state <> 'canceled' AND NOT l.suppressed
-	  ORDER BY i.number, l.updated_at DESC, l.id LIMIT ?`, projectID, limit)
+	// Los limit más recientes (por updated_at) y, entre ellos, por issue.
+	return scanLinks(db, `l.id IN (
+	    SELECT l2.id FROM issues.issue_links l2 JOIN issues.issues i2 ON i2.id = l2.issue_id
+	     WHERE i2.project_id = ? AND i2.state <> 'canceled' AND NOT l2.suppressed
+	     ORDER BY l2.updated_at DESC, l2.id LIMIT ?)
+	  ORDER BY i.number, l.updated_at DESC, l.id`, projectID, limit)
 }
 
 // Process corre fn en una transacción con el lock del repo.

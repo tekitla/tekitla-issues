@@ -99,6 +99,9 @@ type GitHubApp interface {
 	ListRepos(ctx context.Context, installationID int64) ([]model.RemoteRepo, error)
 	// ListOpenPRs devuelve los PR abiertos de un repo como eventos.
 	ListOpenPRs(ctx context.Context, installationID int64, owner, name string) ([]model.RepoEvent, error)
+	// PullRequest devuelve un PR (en cualquier estado) como evento. NotFound
+	// si no existe.
+	PullRequest(ctx context.Context, installationID int64, owner, name string, number int) (model.RepoEvent, error)
 	// VerifyWebhook comprueba la firma X-Hub-Signature-256 del cuerpo, en
 	// tiempo constante.
 	VerifyWebhook(body []byte, signature string) bool

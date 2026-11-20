@@ -206,11 +206,40 @@ func (s *IntegrationService) SyncRepositories(ctx context.Context, uid, projectI
 	if err != nil {
 		return nil, err
 	}
+	// Los links con PR abierto en Tekitla: si su PR ya no está abierto en
+	// GitHub (se perdió el webhook de cierre o fusión), se pide ese PR.
+	stale, err := s.repo.ListLinks(ctx, project.ID, 0, model.MaxProjectLinks)
+	if err != nil {
+		return nil, err
+	}
 	updated := 0
 	for _, r := range repos {
 		events, err := s.github.ListOpenPRs(ctx, conn.InstallationID, r.Owner, r.Name)
+		if domainerrors.IsNotFound(err) {
+			continue // repo borrado o renombrado entre la lista y los PRs
+		}
 		if err != nil {
-			return nil, err
+			return nil, installationGone(err)
+		}
+		open := map[int]bool{}
+		for _, ev := range events {
+			open[ev.PR.Number] = true
+		}
+		seen := map[int]bool{}
+		for _, l := range stale {
+			active := l.PRState == model.PRStateOpen || l.PRState == model.PRStateDraft
+			if l.Repo.ID != r.ID || !active || open[l.PRNumber] || seen[l.PRNumber] {
+				continue
+			}
+			seen[l.PRNumber] = true
+			ev, err := s.github.PullRequest(ctx, conn.InstallationID, r.Owner, r.Name, l.PRNumber)
+			if domainerrors.IsNotFound(err) {
+				continue
+			}
+			if err != nil {
+				return nil, installationGone(err)
+			}
+			events = append(events, ev)
 		}
 		if len(events) == 0 {
 			continue
@@ -256,7 +285,18 @@ func (s *IntegrationService) remoteRepos(ctx context.Context, conn *model.Connec
 	if s.github == nil {
 		return nil, errGitHubNotEnabled()
 	}
-	return s.github.ListRepos(ctx, conn.InstallationID)
+	repos, err := s.github.ListRepos(ctx, conn.InstallationID)
+	return repos, installationGone(err)
+}
+
+// installationGone traduce un 404 de GitHub con una conexión guardada: la
+// App se desinstaló. No es el NOT_FOUND de «la conexión no existe».
+func installationGone(err error) error {
+	if domainerrors.IsNotFound(err) {
+		return domainerrors.FailedPreconditionError("the GitHub App is no longer installed in that organization", nil).
+			WithReason("GITHUB_INSTALLATION_NOT_FOUND")
+	}
+	return err
 }
 
 // ListRepositories devuelve los repos del proyecto.
@@ -333,8 +373,8 @@ func (s *IntegrationService) LinkIssue(ctx context.Context, uid, projectID strin
 				map[string]any{"max": model.MaxLinksPerIssue}).WithReason("ISSUE_LINK_LIMIT")
 		}
 		// Hereda lo que ya se sabe de la rama (head, PR, CI) de otro link.
-		if len(existing) > 0 {
-			copyBranchState(l, existing[0])
+		if src := freshest(existing); src != nil {
+			copyBranchState(l, src)
 		}
 		l.UpdatedBy = ""
 		out = l
@@ -495,8 +535,7 @@ func (s *IntegrationService) apply(ctx context.Context, tx port.LinkTx, repo *mo
 		pr := ev.PR
 		textRefs := model.TextIssueRefs(key, pr.Title+"\n"+pr.Body)
 		return s.upsertBranch(ctx, tx, repo, ev, model.BranchIssueRefs(key, ev.Branch), textRefs, func(l *model.IssueLink) {
-			// Un evento más viejo que lo guardado no lo pisa.
-			if l.PRNumber == pr.Number && l.PRUpdatedAt != nil && pr.UpdatedAt.Before(*l.PRUpdatedAt) {
+			if !prEventApplies(l, pr) {
 				return
 			}
 			l.PRNumber = pr.Number
@@ -507,7 +546,9 @@ func (s *IntegrationService) apply(ctx context.Context, tx port.LinkTx, repo *mo
 				at := pr.UpdatedAt
 				l.PRUpdatedAt = &at
 			}
-			if l.HeadSHA == "" && model.IsSHA(pr.HeadSHA) {
+			// El head del PR manda: en un fork no llega ningún push al repo
+			// base, y si se perdió un push, el PR lo corrige.
+			if model.IsSHA(pr.HeadSHA) {
 				setHead(l, pr.HeadSHA)
 			}
 			touch(l)
@@ -615,8 +656,8 @@ func (s *IntegrationService) upsertBranch(ctx context.Context, tx port.LinkTx, r
 		if l == nil {
 			continue // tope de links del issue: no falla la entrega
 		}
-		if len(existing) > 0 {
-			copyBranchState(l, existing[0])
+		if src := freshest(existing); src != nil {
+			copyBranchState(l, src)
 		}
 		update(l)
 		if err := tx.InsertLink(ctx, l); err != nil {
@@ -651,6 +692,23 @@ func (s *IntegrationService) newLink(ctx context.Context, tx port.LinkTx, repo *
 	}, nil
 }
 
+// prEventApplies decide si un evento de PR cambia el link:
+//   - el mismo PR: si no es más viejo que lo guardado;
+//   - otro PR de la misma rama: no reemplaza a uno abierto (o borrador) con
+//     uno cerrado o fusionado, ni a uno guardado más nuevo.
+func prEventApplies(l *model.IssueLink, pr *model.PREvent) bool {
+	older := l.PRUpdatedAt != nil && !pr.UpdatedAt.IsZero() && pr.UpdatedAt.Before(*l.PRUpdatedAt)
+	if l.PRNumber == 0 || l.PRNumber == pr.Number {
+		return !older
+	}
+	storedActive := l.PRState == model.PRStateOpen || l.PRState == model.PRStateDraft
+	incomingActive := pr.State == model.PRStateOpen || pr.State == model.PRStateDraft
+	if storedActive && !incomingActive {
+		return false
+	}
+	return !older
+}
+
 // setHead cambia el último commit de la rama: el CI del commit anterior ya no
 // vale.
 func setHead(l *model.IssueLink, sha string) {
@@ -660,6 +718,18 @@ func setHead(l *model.IssueLink, sha string) {
 	l.HeadSHA = sha
 	l.CISuites = map[string]model.CIStatus{}
 	l.CIStatus = model.CIStatusNone
+}
+
+// freshest es el link sin suprimir actualizado más recientemente (los
+// suprimidos no reciben eventos y su estado puede ser viejo). nil si no hay.
+func freshest(links []*model.IssueLink) *model.IssueLink {
+	var best *model.IssueLink
+	for _, l := range links {
+		if !l.Suppressed && (best == nil || l.UpdatedAt.After(best.UpdatedAt)) {
+			best = l
+		}
+	}
+	return best
 }
 
 // copyBranchState copia a un link nuevo lo que ya se sabe de su rama.

@@ -59,6 +59,11 @@ services:
       SESSION_STALL_AFTER: 10m
       GRPC_PORT: "5000"
       DATABASE_URL: postgres://postgres:postgres@postgres:5432/postgres?sslmode=disable
+      # Issue 016: GitHub App (vacías = integración con GitHub apagada).
+      GITHUB_APP_ID: ${GITHUB_APP_ID:-}
+      GITHUB_APP_SLUG: ${GITHUB_APP_SLUG:-}
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
       OTEL_SERVICE_NAME: issues-service
       OTEL_RESOURCE_ATTRIBUTES: service.version=local,deployment.environment=dev
     ports:

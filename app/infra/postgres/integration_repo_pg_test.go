@@ -34,6 +34,9 @@ func (f pgFakeGitHub) ListRepos(context.Context, int64) ([]model.RemoteRepo, err
 func (f pgFakeGitHub) ListOpenPRs(context.Context, int64, string, string) ([]model.RepoEvent, error) {
 	return nil, nil
 }
+func (f pgFakeGitHub) PullRequest(context.Context, int64, string, string, int) (model.RepoEvent, error) {
+	return model.RepoEvent{}, domainerrors.NotFoundError("no", nil)
+}
 func (f pgFakeGitHub) VerifyWebhook(body []byte, sig string) bool {
 	return github.VerifySignature([]byte(pgSecret), body, sig)
 }

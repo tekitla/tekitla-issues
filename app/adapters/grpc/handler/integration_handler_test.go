@@ -39,6 +39,8 @@ type fakeGitHub struct {
 	installations map[int64]string
 	repos         []model.RemoteRepo
 	openPRs       map[string][]model.RepoEvent
+	// prs: PR por «owner/name#n», para PullRequest (cualquier estado).
+	prs map[string]model.RepoEvent
 }
 
 func newFakeGitHub() *fakeGitHub {
@@ -50,6 +52,7 @@ func newFakeGitHub() *fakeGitHub {
 			{ExternalID: 103, Owner: "acme", Name: "sitio", DefaultBranch: "main", Topics: []string{"personal"}},
 		},
 		openPRs: map[string][]model.RepoEvent{},
+		prs:     map[string]model.RepoEvent{},
 	}
 }
 
@@ -77,6 +80,16 @@ func (f *fakeGitHub) ListOpenPRs(_ context.Context, _ int64, owner, name string)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.openPRs[owner+"/"+name], nil
+}
+
+func (f *fakeGitHub) PullRequest(_ context.Context, _ int64, owner, name string, n int) (model.RepoEvent, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ev, ok := f.prs[fmt.Sprintf("%s/%s#%d", owner, name, n)]
+	if !ok {
+		return model.RepoEvent{}, domainerrors.NotFoundError("no", nil)
+	}
+	return ev, nil
 }
 
 func (f *fakeGitHub) VerifyWebhook(body []byte, sig string) bool {
@@ -842,4 +855,45 @@ func mustProject(t *testing.T, c clients, key string) string {
 		t.Fatal(err)
 	}
 	return p.GetProject().GetId()
+}
+
+// Otro PR de la misma rama no reemplaza a uno abierto con uno cerrado; el
+// head del PR manda (fork, push perdido).
+func TestIntegration_PRSwitchAndHeadFromPR(t *testing.T) {
+	f := newIntegrationFixture(t)
+	f.mustDeliver(t, "pull_request", "d1", prBody(101, 8, "feat/tk-5-x", shaA, "open", false, "Nuevo", "2026-11-19T10:00:00Z"),
+		issuesv1.WebhookOutcome_WEBHOOK_OUTCOME_PROCESSED)
+	// Llega tarde el cierre de un PR viejo (#3) de la misma rama.
+	f.mustDeliver(t, "pull_request", "d2", prBody(101, 3, "feat/tk-5-x", shaA, "closed", false, "Viejo", "2026-11-19T11:00:00Z"),
+		issuesv1.WebhookOutcome_WEBHOOK_OUTCOME_PROCESSED)
+	if l := f.links(t, 5)[0]; l.GetPrNumber() != 8 || l.GetPrState() != issuesv1.PrState_PR_STATE_OPEN {
+		t.Errorf("un PR cerrado reemplazó al abierto: %+v", l)
+	}
+	// synchronize con un commit nuevo (sin push al repo base): el head se
+	// mueve y el check del commit nuevo aplica.
+	f.mustDeliver(t, "pull_request", "d3", prBody(101, 8, "feat/tk-5-x", shaB, "open", false, "Nuevo", "2026-11-19T12:00:00Z"),
+		issuesv1.WebhookOutcome_WEBHOOK_OUTCOME_PROCESSED)
+	f.mustDeliver(t, "check_suite", "d4", checkBody(101, 9, "feat/tk-5-x", shaB, "completed", "failure"),
+		issuesv1.WebhookOutcome_WEBHOOK_OUTCOME_PROCESSED)
+	if l := f.links(t, 5)[0]; l.GetHeadSha() != shaB || l.GetCiStatus() != issuesv1.CiStatus_CI_STATUS_FAILED {
+		t.Errorf("head o CI del PR: %+v", l)
+	}
+}
+
+// Sync recupera un cierre perdido: el PR abierto en Tekitla que ya no está
+// abierto en GitHub se pide por número.
+func TestIntegration_SyncRefreshesStalePR(t *testing.T) {
+	f := newIntegrationFixture(t)
+	f.mustDeliver(t, "pull_request", "d1", prBody(101, 7, "feat/tk-6-x", shaA, "open", false, "X", "2026-11-19T10:00:00Z"),
+		issuesv1.WebhookOutcome_WEBHOOK_OUTCOME_PROCESSED)
+	f.c.gh.prs["acme/api#7"] = model.RepoEvent{
+		Kind: model.RepoEventPR, Actor: "dev-prueba", Branch: "feat/tk-6-x",
+		PR: &model.PREvent{Number: 7, Title: "X", State: model.PRStateMerged, HeadSHA: shaA},
+	}
+	if _, err := f.c.repos.SyncRepositories(f.ctx, &issuesv1.SyncRepositoriesRequest{ProjectId: f.project.GetId(), ConnectionId: f.conn.GetId()}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.links(t, 6)[0].GetPrState(); got != issuesv1.PrState_PR_STATE_MERGED {
+		t.Errorf("PR #7 sigue %v tras sincronizar", got)
+	}
 }

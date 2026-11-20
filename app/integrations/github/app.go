@@ -43,8 +43,10 @@ const DefaultAPIBase = "https://api.github.com"
 const (
 	maxResponseBytes = 5 << 20
 	requestTimeout   = 10 * time.Second
-	// maxRepoPages * 100 = el tope de repos por proyecto.
-	maxRepoPages = 3
+	// maxRepoPages * 100 repos se leen de la instalación; el tope de 300 por
+	// proyecto se aplica después del alcance (model.SelectRepos), así un repo
+	// elegido en la página 4 no se pierde.
+	maxRepoPages = 30
 )
 
 // Config es la configuración de la App. Sale de variables de entorno
@@ -296,6 +298,24 @@ func (a *App) ListOpenPRs(ctx context.Context, installationID int64, owner, name
 		}
 	}
 	return out, nil
+}
+
+// PullRequest devuelve un PR (en cualquier estado) como evento.
+func (a *App) PullRequest(ctx context.Context, installationID int64, owner, name string, number int) (model.RepoEvent, error) {
+	token, err := a.installationToken(ctx, installationID)
+	if err != nil {
+		return model.RepoEvent{}, err
+	}
+	var pr apiPR
+	path := "/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(name) + "/pulls/" + strconv.Itoa(number)
+	if err := a.do(ctx, http.MethodGet, path, "token "+token, &pr); err != nil {
+		return model.RepoEvent{}, err
+	}
+	ev, ok := pr.event(pr.User.Login)
+	if !ok {
+		return model.RepoEvent{}, domainerrors.NotFoundError("pull request without shape", nil)
+	}
+	return ev, nil
 }
 
 // do hace un request a la API y decodifica la respuesta. 404 → NotFound;
