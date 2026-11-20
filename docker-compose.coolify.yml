@@ -41,6 +41,13 @@ services:
       # postgres://tekitla_issues:<pass>@<UUID-del-postgres-compartido>:5432/tekitla_issues?sslmode=disable
       # (ver docs/deploy.md; este servicio no la arma).
       DATABASE_URL: ${DATABASE_URL:?}
+      # Issue 016: GitHub App del ambiente (runbook en el plan del issue).
+      # Vacías: la integración con GitHub queda apagada. Las carga Victor en
+      # Coolify; nunca van al repo.
+      GITHUB_APP_ID: ${GITHUB_APP_ID:-}
+      GITHUB_APP_SLUG: ${GITHUB_APP_SLUG:-}
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
       OTEL_SERVICE_NAME: issues-service
       OTEL_RESOURCE_ATTRIBUTES: service.version=${IMAGE_TAG},deployment.environment=${SERVICE_ENV:-production}
     expose:
