@@ -54,6 +54,20 @@ jobs:
   # ---------------------------------------------------------------------------
   test:
     runs-on: ubuntu-latest
+    # Postgres descartable para los tests *_Postgres (repos con SQL propio:
+    # integración del 016 y sesiones del 036). Solo vive durante el job.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
     steps:
       - name: Validar input del override
         if: github.event_name == 'workflow_dispatch'
@@ -84,6 +98,12 @@ jobs:
           go mod verify
           go vet ./...
           go test ./... -count=1 -timeout=120s
+
+      # Los mismos tests que `make test-pg`, contra el service de arriba.
+      - name: Tests contra Postgres
+        env:
+          TEKITLA_PG_TEST_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+        run: go test ./app/infra/postgres/ -run Postgres -count=1 -v
 
       # Vulnerabilidades ALCANZABLES en dependencias y stdlib (mismo criterio que el gateway).
       - name: govulncheck

@@ -2,9 +2,6 @@ package postgres_test
 
 import (
 	"context"
-	"os"
-	"path/filepath"
-	"sort"
 	"sync"
 	"testing"
 
@@ -45,22 +42,7 @@ func (f pgFakeGitHub) ParseWebhook(event string, body []byte) (int64, []model.Re
 }
 
 func TestIntegrationRepository_Postgres(t *testing.T) {
-	url := os.Getenv("TEKITLA_PG_TEST_URL")
-	if url == "" {
-		t.Skip("sin TEKITLA_PG_TEST_URL (ver scripts/test_pg.sh)")
-	}
-	db, err := postgres.NewDB(url, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	files, _ := filepath.Glob("../../../migrations/*.up.sql")
-	sort.Strings(files)
-	for _, f := range files {
-		b, _ := os.ReadFile(f)
-		if err := db.Exec(string(b)).Error; err != nil {
-			t.Fatalf("%s: %v", f, err)
-		}
-	}
+	db := pgTestDB(t)
 	ctx := context.Background()
 	workspaces, projects := postgres.NewWorkspaceRepository(db), postgres.NewProjectRepository(db)
 	issueSvc := application.NewIssueService(workspaces, projects, postgres.NewIssueRepository(db),

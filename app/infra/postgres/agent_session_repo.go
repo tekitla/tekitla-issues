@@ -136,9 +136,14 @@ func (r *AgentSessionRepository) Report(ctx context.Context, key model.SessionKe
 			for i := range rows {
 				ids[i] = rows[i].ID
 			}
+			// Qué sesiones ya tienen historia: EXISTS por la PK (session_id,
+			// seq), sin leer toda la historia. `IN ?` y no un arreglo: GORM
+			// expande una lista como (a, b), y ARRAY[(a, b)] es un record, no
+			// un uuid[] (incidente del 2026-11-20 en prod; lo cubre
+			// TestAgentSessionsReport_Postgres con varias sesiones).
 			var withHistory []string
-			if err := tx.Raw(`SELECT s.id FROM unnest(ARRAY[?]::uuid[]) AS s(id)
-				       WHERE EXISTS (SELECT 1 FROM issues.agent_session_transitions t WHERE t.session_id = s.id)`, ids).
+			if err := tx.Raw(`SELECT s.id FROM issues.agent_sessions s
+				       WHERE s.id IN ? AND EXISTS (SELECT 1 FROM issues.agent_session_transitions t WHERE t.session_id = s.id)`, ids).
 				Scan(&withHistory).Error; err != nil {
 				return err
 			}
