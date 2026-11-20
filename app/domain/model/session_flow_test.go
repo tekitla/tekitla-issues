@@ -137,6 +137,23 @@ func TestHumanQueue(t *testing.T) {
 	if q.Pending != 0 || q.Response.Count != 0 {
 		t.Errorf("day 2: %+v", q)
 	}
+	// Una espera que cruza un hueco (laptop cerrada de noche) sigue siendo la
+	// misma: respondida a las 10:00, dura 16 h.
+	night := segsOf(now,
+		track("n", now,
+			tr("2026-12-01T18:00:00Z", SessionIdle, WaitingPerson, WaitingReasonReview, 5),
+			tr("2026-12-01T19:00:00Z", SessionUnreported, WaitingNone, "", 0),
+			tr("2026-12-02T09:00:00Z", SessionIdle, WaitingPerson, WaitingReasonReview, 5),
+			tr("2026-12-02T10:00:00Z", SessionWorking, WaitingNone, "", 5),
+			tr("2026-12-02T11:00:00Z", SessionEnded, WaitingNone, "", 5)))
+	nq := HumanQueueIn(night, ts("2026-12-01T00:00:00Z"), ts("2026-12-03T00:00:00Z"), ts(now))
+	if nq.Response.Count != 1 || nq.Response.Median != 16*time.Hour {
+		t.Errorf("wait across a gap: %+v", nq)
+	}
+	if e := EfficiencyIn(night, ts("2026-12-01T00:00:00Z"), ts("2026-12-03T00:00:00Z")); e.WaitingHuman != 2*time.Hour {
+		t.Errorf("the gap does not add waiting hours: %+v", e)
+	}
+
 	// A media espera de la respondida: pendiente.
 	q = HumanQueueIn(segs, ts("2026-12-01T00:00:00Z"), ts("2026-12-01T11:30:00Z"), ts(now))
 	if q.Pending != 1 || q.OldestPending != 90*time.Minute {

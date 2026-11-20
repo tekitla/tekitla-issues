@@ -312,7 +312,11 @@ func normalizeReported(s ReportedSession) (ReportedSession, error) {
 	}
 	if s.WaitingOn == WaitingNone {
 		s.WaitingText = ""
-		s.WaitingReason = WaitingReasonNone
+		// esperando-ok sin token también espera a su persona (issue 036): su
+		// motivo se conserva.
+		if s.Status != SessionWaitingOK {
+			s.WaitingReason = WaitingReasonNone
+		}
 	}
 	return s, nil
 }

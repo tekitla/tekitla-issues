@@ -234,7 +234,7 @@ Reglas de negocio no obvias:
     `model.SummarizeSessions`; la lista (hasta 5) solo en `GetIssue`. Cuenta
     las sesiones de cualquier persona del proyecto.
   - `waiting_reason` (036, `000011`): `review`, `testing`, `decision`,
-    `deploy` o vacío; se guarda vacío con `waiting_on` `none` (CHECK
+    `deploy` o vacío; se guarda vacío sin espera (`waiting_on` `none` y estado distinto de `waiting_ok`; CHECK
     `agent_sessions_waiting_reason_none_chk`).
   - Recolector local en `tools/herdr-collector` (ver su `README.md`).
 - Integración con GitHub y GitLab (016, `000010`; plan en el repo docs, el

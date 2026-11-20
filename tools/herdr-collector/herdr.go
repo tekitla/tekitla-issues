@@ -97,7 +97,8 @@ func translate(cfg config, agents []herdrAgent, workspaces map[string]string) []
 		}
 		s.WaitingOn, s.WaitingTarget = waitingOf(a.Tokens)
 		s.WaitingTarget = clip(s.WaitingTarget, 80)
-		if s.WaitingOn != issuesv1.WaitingOn_WAITING_ON_NONE {
+		// Con espera, o en esperando-ok sin token (pide permiso o respuesta).
+		if s.WaitingOn != issuesv1.WaitingOn_WAITING_ON_NONE || s.Status == issuesv1.SessionStatus_SESSION_STATUS_WAITING_OK {
 			s.WaitingReason = reasonOf(a.Tokens["espera_motivo"])
 		}
 		// Un panel que trabaja no espera (CU-026-12): el token puede ser de

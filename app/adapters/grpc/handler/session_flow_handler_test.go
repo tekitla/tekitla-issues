@@ -46,11 +46,10 @@ func TestSessionFlow_CU0366(t *testing.T) {
 	s = reported("s1", "TK", 1, byCwd, waiting)
 	s.WaitingReason = issuesv1.WaitingReason_WAITING_REASON_DECISION
 	report(t, c, ctx, "PC-01", s)
-	// El motivo se guarda y se lee (decisión 4). En esperando-ok sin token,
-	// waiting_on queda NONE y la espera cuenta igual como espera a una
-	// persona; con waiting_on NONE el motivo no se guarda.
-	if got := onlySession(t, c, ctx, &issuesv1.ListAgentSessionsRequest{ProjectId: pid}); got.GetWaitingReason() != issuesv1.WaitingReason_WAITING_REASON_UNSPECIFIED {
-		t.Errorf("reason without waiting_on: %v", got.GetWaitingReason())
+	// El motivo se guarda y se lee (decisión 4), también en esperando-ok sin
+	// token (waiting_on NONE): es una espera a su persona.
+	if got := onlySession(t, c, ctx, &issuesv1.ListAgentSessionsRequest{ProjectId: pid}); got.GetWaitingReason() != issuesv1.WaitingReason_WAITING_REASON_DECISION {
+		t.Errorf("reason in esperando-ok without token: %v", got.GetWaitingReason())
 	}
 	s.WaitingOn = issuesv1.WaitingOn_WAITING_ON_PERSON
 	report(t, c, ctx, "PC-01", s)
@@ -76,7 +75,6 @@ func TestSessionFlow_CU0366(t *testing.T) {
 	for _, rt := range e.GetWaitingHumanByReason() {
 		byReason[rt.GetReason()] = rt.GetDuration().AsDuration()
 	}
-	// Los dos primeros minutos fueron esperando-ok sin motivo.
 	if byReason[issuesv1.WaitingReason_WAITING_REASON_DECISION] != 5*time.Hour || byReason[issuesv1.WaitingReason_WAITING_REASON_UNSPECIFIED] != 0 {
 		t.Errorf("by reason: %v", byReason)
 	}

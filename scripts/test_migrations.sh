@@ -419,6 +419,10 @@ must_fail "motivo desconocido" "UPDATE issues.agent_sessions SET waiting_reason 
 must_fail "motivo sin espera" "UPDATE issues.agent_sessions SET waiting_reason = 'review' WHERE external_id = 'p2'"
 sql "UPDATE issues.agent_sessions SET waiting_reason = 'review' WHERE external_id = 'p1'"
 echo "ok   una espera con motivo"
+sql "$(ses p4 NULL NULL none waiting_ok none NULL)"
+sql "UPDATE issues.agent_sessions SET waiting_reason = 'testing' WHERE external_id = 'p4'"
+echo "ok   esperando-ok sin token con motivo"
+must_fail "trabajando con motivo" "UPDATE issues.agent_sessions SET status = 'working' WHERE external_id = 'p4'"
 SID="$(sql "SELECT id FROM issues.agent_sessions WHERE external_id = 'p1'" | tr -d '\r')"
 tr11() { # tr11 <status> <waiting_on> <reason> <project_id|NULL> <issue_number|NULL>
   echo "INSERT INTO issues.agent_session_transitions (session_id, at, status, waiting_on, waiting_reason, project_id, issue_number)
@@ -440,7 +444,7 @@ check "borrar la sesión borra su historia" "0" "SELECT count(*) FROM issues.age
 apply 000011_agent_session_transitions.down
 check "down: sin la tabla" "0" "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'issues' AND table_name = 'agent_session_transitions'"
 check "down: sin la columna" "0" "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'issues' AND table_name = 'agent_sessions' AND column_name = 'waiting_reason'"
-check "down: las sesiones se conservan" "$SESSIONS_BEFORE_11" "SELECT count(*) FROM issues.agent_sessions"
+check "down: las sesiones se conservan" "$((SESSIONS_BEFORE_11 + 1))" "SELECT count(*) FROM issues.agent_sessions"
 
 apply 000011_agent_session_transitions.up
 check "up de nuevo: sin historia y sin motivos" "0|0" "SELECT (SELECT count(*) FROM issues.agent_session_transitions), count(*) FILTER (WHERE waiting_reason <> '') FROM issues.agent_sessions"

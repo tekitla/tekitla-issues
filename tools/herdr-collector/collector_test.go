@@ -154,6 +154,8 @@ func TestWaitingReason(t *testing.T) {
 		agent("r4", "", "working", "", "w1", map[string]string{"espera_tipo": "persona", "espera_motivo": "pruebas"}),
 		// Motivo sin espera: no cuenta.
 		agent("r5", "", "idle", "", "w1", map[string]string{"espera_motivo": "decision"}),
+		// esperando-ok sin espera_tipo: sí cuenta.
+		agent("r6", "", "blocked", "", "w1", map[string]string{"espera_motivo": "decision"}),
 	}
 	want := map[string]issuesv1.WaitingReason{
 		"r1": issuesv1.WaitingReason_WAITING_REASON_REVIEW,
@@ -161,6 +163,7 @@ func TestWaitingReason(t *testing.T) {
 		"r3": issuesv1.WaitingReason_WAITING_REASON_UNSPECIFIED,
 		"r4": issuesv1.WaitingReason_WAITING_REASON_UNSPECIFIED,
 		"r5": issuesv1.WaitingReason_WAITING_REASON_UNSPECIFIED,
+		"r6": issuesv1.WaitingReason_WAITING_REASON_DECISION,
 	}
 	for _, s := range translate(testCfg, agents, nil) {
 		if s.GetWaitingReason() != want[s.GetExternalId()] {

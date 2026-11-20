@@ -23,9 +23,10 @@
 ALTER TABLE issues.agent_sessions ADD COLUMN waiting_reason TEXT NOT NULL DEFAULT '';
 ALTER TABLE issues.agent_sessions ADD CONSTRAINT agent_sessions_waiting_reason_chk
     CHECK (waiting_reason IN ('', 'review', 'testing', 'decision', 'deploy'));
--- Sin espera no hay motivo.
+-- Sin espera no hay motivo. esperando-ok sin token (waiting_ok con
+-- waiting_on 'none') también espera a su persona y puede traerlo.
 ALTER TABLE issues.agent_sessions ADD CONSTRAINT agent_sessions_waiting_reason_none_chk
-    CHECK (waiting_on <> 'none' OR waiting_reason = '');
+    CHECK (waiting_on <> 'none' OR status = 'waiting_ok' OR waiting_reason = '');
 
 
 -- ------------------------------------------------------------

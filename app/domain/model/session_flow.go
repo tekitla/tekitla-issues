@@ -361,8 +361,10 @@ func humanWaits(segs map[IssueKey][]FlowSegment, now time.Time) []humanWait {
 				continue
 			}
 			w := humanWait{start: list[i].Start, end: list[i].End}
-			// Un cambio de motivo sigue siendo la misma espera.
-			for i+1 < len(list) && list[i+1].Class == FlowClassWaitingHuman && list[i+1].Start.Equal(w.end) {
+			// Un cambio de motivo sigue siendo la misma espera, y un hueco sin
+			// reportes seguido de otra vez espera también (la máquina estuvo
+			// apagada mientras esperaba): la duración va de punta a punta.
+			for i+1 < len(list) && list[i+1].Class == FlowClassWaitingHuman {
 				i++
 				w.end = list[i].End
 			}
