@@ -135,7 +135,10 @@ func (r *FlowRepository) ListFlowIssues(ctx context.Context, projectID string, l
 	return out, nil
 }
 
-// ListSessionTracks: ver port.FlowRepository. Dos consultas: las sesiones
+// ListSessionTracks: ver port.FlowRepository. Incluye las transiciones en
+// to: cierran el tramo anterior (una espera respondida justo en to no queda
+// pendiente).
+// Dos consultas: las sesiones
 // que alguna vez se ligaron al proyecto (o al issue) y toda su historia
 // anterior a to (índice agent_session_transitions_issue_idx y la PK).
 func (r *FlowRepository) ListSessionTracks(ctx context.Context, projectID string, number int32, to time.Time) ([]model.SessionTrack, error) {
@@ -170,7 +173,7 @@ func (r *FlowRepository) ListSessionTracks(ctx context.Context, projectID string
 	}
 	var rows []sessionTransitionRow
 	err := db.Raw(`SELECT * FROM issues.agent_session_transitions
-	                WHERE session_id IN ? AND at < ? ORDER BY session_id, at, seq`, ids, to).Scan(&rows).Error
+	                WHERE session_id IN ? AND at <= ? ORDER BY session_id, at, seq`, ids, to).Scan(&rows).Error
 	if err != nil {
 		return nil, translateError(err, "flow", "list session transitions", details)
 	}

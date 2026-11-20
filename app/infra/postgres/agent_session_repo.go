@@ -137,7 +137,8 @@ func (r *AgentSessionRepository) Report(ctx context.Context, key model.SessionKe
 				ids[i] = rows[i].ID
 			}
 			var withHistory []string
-			if err := tx.Raw(`SELECT DISTINCT session_id FROM issues.agent_session_transitions WHERE session_id IN ?`, ids).
+			if err := tx.Raw(`SELECT s.id FROM unnest(ARRAY[?]::uuid[]) AS s(id)
+				       WHERE EXISTS (SELECT 1 FROM issues.agent_session_transitions t WHERE t.session_id = s.id)`, ids).
 				Scan(&withHistory).Error; err != nil {
 				return err
 			}

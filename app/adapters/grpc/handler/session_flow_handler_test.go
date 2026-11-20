@@ -133,3 +133,20 @@ func TestSessionFlow_Errors(t *testing.T) {
 		}
 	}
 }
+
+// Un motivo de espera desconocido (un recolector con un proto más nuevo) no
+// rechaza el reporte: la sesión se guarda sin motivo.
+func TestSessionFlow_UnknownReasonDoesNotRejectReport(t *testing.T) {
+	c := newClients(t)
+	ctx := asUser(t, "u1")
+	s := reported("s1", "", 0, noLink, waiting)
+	s.WaitingOn = issuesv1.WaitingOn_WAITING_ON_PERSON
+	s.WaitingReason = issuesv1.WaitingReason(99)
+	if res := report(t, c, ctx, "PC-01", s); res.GetCreated() != 1 {
+		t.Fatalf("report: %+v", res)
+	}
+	got := onlySession(t, c, ctx, &issuesv1.ListAgentSessionsRequest{Unlinked: true})
+	if got.GetWaitingReason() != issuesv1.WaitingReason_WAITING_REASON_UNSPECIFIED || got.GetWaitingOn() != issuesv1.WaitingOn_WAITING_ON_PERSON {
+		t.Errorf("session: %+v", got)
+	}
+}

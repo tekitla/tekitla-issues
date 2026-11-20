@@ -59,13 +59,15 @@ func WaitingReasonToProto(r model.WaitingReason) issuesv1.WaitingReason {
 	return waitingReasonTo[r] // "" y ausente: UNSPECIFIED (0)
 }
 
-// waitingReasonFromProto: un valor desconocido queda como string inválido
-// (la capa de aplicación lo rechaza).
+// waitingReasonFromProto: un valor desconocido (un recolector con un proto
+// más nuevo) va sin motivo, como el token desconocido en el recolector. El
+// motivo es informativo: no puede hacer rechazar el reporte de la máquina,
+// que además es su latido.
 func waitingReasonFromProto(r issuesv1.WaitingReason) model.WaitingReason {
 	if v, ok := waitingReasonFrom[r]; ok {
 		return v
 	}
-	return model.WaitingReason(fmt.Sprintf("unknown(%d)", int32(r)))
+	return model.WaitingReasonNone
 }
 
 func invert[K comparable, V comparable](m map[K]V) map[V]K {

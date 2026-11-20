@@ -13,7 +13,7 @@ type FlowRepository interface {
 	// historial (en orden created_at, seq). Con labelIDs, solo los issues con
 	// alguna de ellas (ya validadas: son del proyecto).
 	ListFlowIssues(ctx context.Context, projectID string, labelIDs []string) ([]model.FlowIssue, error)
-	// ListSessionTracks devuelve la historia (antes de to) de las sesiones
+	// ListSessionTracks devuelve la historia (hasta to, incluido) de las sesiones
 	// que alguna vez se ligaron al proyecto (con number > 0, a ese issue),
 	// de cualquier persona, con todas sus transiciones en orden (at, seq):
 	// también las ligadas a otros issues, que cierran los tramos.

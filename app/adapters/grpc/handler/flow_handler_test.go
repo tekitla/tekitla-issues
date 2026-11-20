@@ -61,7 +61,7 @@ func (s memFlow) ListSessionTracks(_ context.Context, projectID string, number i
 	byID := map[string]*model.SessionTrack{}
 	var order []string
 	for _, t := range s.transitions {
-		if !linked[t.SessionID] || !t.At.Before(to) {
+		if !linked[t.SessionID] || t.At.After(to) {
 			continue
 		}
 		tr, ok := byID[t.SessionID]

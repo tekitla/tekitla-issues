@@ -170,6 +170,11 @@ func (s *FlowService) GetIssueFlowEfficiency(ctx context.Context, ownerUID strin
 	}
 	from := in.From
 	if from.IsZero() {
+		// Sin from, desde el alta: un to anterior es un período vacío, no un
+		// error sobre un campo que no vino.
+		if !issue.CreatedAt.Before(to) {
+			return &IssueFlowResult{}, nil
+		}
 		from = issue.CreatedAt
 	}
 	if !from.Before(to) {
