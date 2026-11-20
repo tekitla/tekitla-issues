@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # =============================================================================
 # Tests contra un Postgres 16 descartable (docker): los que se saltan sin
-# TEKITLA_PG_TEST_URL (hoy, el repo de la integración del issue 016).
+# TEKITLA_PG_TEST_URL (hoy, el repo de la integración del issue 016 y el
+# de las sesiones de agentes, ReportSessions con historia, del 036).
 # Levanta un contenedor propio y lo borra al terminar. No toca ninguna base real.
 #
 #   scripts/test_pg.sh        (o `make test-pg`)

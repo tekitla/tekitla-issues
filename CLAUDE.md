@@ -392,8 +392,14 @@ compose, ver `cli/healthcheck.go`) y reflection fuera de prod.
   de errores del repo.
 - Handlers: un test de punta a punta con `bufconn` y repos en memoria alcanza
   (ver `issue_handler_test.go`: identidad, pertenencia y mapeo de errores).
-- No hay tests de integración de los repos contra Postgres: se prueban
-  levantando `make up` y pegándole con `grpcurl` (ver "Comandos").
+- Repos contra Postgres real: los tests `*_Postgres` de `app/infra/postgres`
+  (base con `pgTestDB`, que aplica las migraciones una vez) se saltan sin
+  `TEKITLA_PG_TEST_URL`. En local, `make test-pg` levanta un Postgres
+  descartable; en el CI, el job `test` tiene un service. Todo SQL propio
+  (Raw, listas, arreglos) lleva uno: con repos en memoria, el SQL no se
+  prueba (incidente del 2026-11-20: `ARRAY[?]::uuid[]` con varias sesiones
+  dio 500 en `ReportSessions`). Lo demás se prueba levantando `make up` y
+  pegándole con `grpcurl` (ver "Comandos").
 - Migraciones: `make test-migrations` (`scripts/test_migrations.sh`) aplica
   todas contra un Postgres 16 descartable en docker, carga datos de la versión
   anterior antes de cada backfill, verifica el backfill y las restricciones, y
