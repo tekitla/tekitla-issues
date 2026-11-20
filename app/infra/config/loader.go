@@ -34,6 +34,14 @@ type Config struct {
 	// ("10m"); vacía o inválida = 10 minutos.
 	SessionStallAfter time.Duration
 
+	// GitHub App del ambiente (issue 016). Todas vacías: la integración con
+	// GitHub está apagada. Las carga Victor en Coolify; nunca van al repo ni
+	// a los logs (el banner no las muestra).
+	GitHubAppID         string
+	GitHubAppSlug       string
+	GitHubAppPrivateKey string // PEM en base64 (o el PEM tal cual)
+	GitHubWebhookSecret string
+
 	// OpenTelemetry (se exponen para el banner/logs; el exporter se cablea
 	// cuando el servicio lo necesite)
 	OtelExporterEndpoint string
@@ -69,6 +77,11 @@ func Load() *Config {
 		LogLevel: getEnv("LOG_LEVEL", "info"),
 
 		SessionStallAfter: getEnvAsDuration("SESSION_STALL_AFTER", 10*time.Minute),
+
+		GitHubAppID:         getEnv("GITHUB_APP_ID", ""),
+		GitHubAppSlug:       getEnv("GITHUB_APP_SLUG", ""),
+		GitHubAppPrivateKey: getEnv("GITHUB_APP_PRIVATE_KEY", ""),
+		GitHubWebhookSecret: getEnv("GITHUB_WEBHOOK_SECRET", ""),
 
 		OtelExporterEndpoint: getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
 		OtelServiceName:      getEnv("OTEL_SERVICE_NAME", "issues-service"),

@@ -35,6 +35,11 @@ var secretMethods = map[string]bool{
 	"/issues.v1.SharedProjectService/GetSharedProject": true,
 	"/issues.v1.SharedProjectService/ListSharedIssues": true,
 	"/issues.v1.SharedProjectService/GetSharedIssue":   true,
+	// Issue 016: la firma o el secreto del webhook viajan en el request, y el
+	// secreto de un webhook de GitLab sale en la respuesta de
+	// ConnectOrganization.
+	"/issues.v1.WebhookService/ReceiveWebhook":         true,
+	"/issues.v1.RepositoryService/ConnectOrganization": true,
 }
 
 // UnaryLogger retorna un interceptor que loguea cada petición gRPC unaria.

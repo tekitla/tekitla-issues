@@ -9,8 +9,8 @@ curso, hecho, descartado), orden manual por `rank`, etiquetas, comentarios e
 historial (rebanada 3a), descartar con motivo (issue 011), búsqueda, filtros
 y orden en la lista (012), color, límite WIP y columnas ocultas (013) y
 actores, agentes, tokens por actor, asignado e importación (025, ADR 0009 del
-repo docs), enlaces de solo lectura (009) y sesiones de agentes que reporta
-el recolector de herdr (026).
+repo docs), enlaces de solo lectura (009), sesiones de agentes que reporta
+el recolector de herdr (026) e integración con GitHub y GitLab (016).
 
 - **Contrato**: `issues.v1.IssueService` de `github.com/tekitla/tekitla-protos`
   (`gen/go/issues/v1`): proyectos, issues (`ListIssues`, `GetIssue`,
@@ -207,6 +207,35 @@ Reglas de negocio no obvias:
     `model.SummarizeSessions`; la lista (hasta 5) solo en `GetIssue`. Cuenta
     las sesiones de cualquier persona del proyecto.
   - Recolector local en `tools/herdr-collector` (ver su `README.md`).
+- Integración con GitHub y GitLab (016, `000010`; plan en el repo docs, el
+  comentario de `integrations.proto` es la especificación):
+  - `RepositoryService` (conexiones, repos, links): solo el dueño del
+    proyecto (`projectGuard`); un agente solo lee links (`ListIssueLinks`).
+    `WebhookService.ReceiveWebhook` es interno (lo llama el handler de
+    webhooks del gateway) y no lee `x-user-id`.
+  - Código del proveedor en `app/integrations/github` (JWT de la App,
+    tokens de instalación en memoria, firma HMAC en tiempo constante,
+    parseo con structs mínimos). Solo habla con `api.github.com`, sin
+    redirecciones, 10 s y 5 MiB. GitHub se enciende con `GITHUB_APP_ID`,
+    `GITHUB_APP_SLUG`, `GITHUB_APP_PRIVATE_KEY` (PEM en base64) y
+    `GITHUB_WEBHOOK_SECRET`; sin ninguna, apagado; incompletas, el servicio
+    no arranca. GitLab todavía no (`GITLAB_NOT_ENABLED`; plan §3.2).
+  - Ligado: `<CLAVE>-<n>` (clave del proyecto del repo) o `issue-<n>` en la
+    rama, `<CLAVE>-<n>` en título o descripción del PR
+    (`model.BranchIssueRefs`, `TextIssueRefs`). Un número que no existe no
+    liga ni falla. Link único por `(issue, repo, rama)`; quitarlo lo
+    suprime (un evento nuevo no lo recrea, `LinkIssue` sí). 20 por issue.
+  - Webhooks: firma → id de entrega → repo conectado (si no, `IGNORED`) →
+    `Process`: transacción con advisory lock por repo, entrega en
+    `webhook_deliveries` (repetida → `DUPLICATE` sin tocar nada; se borran
+    las de más de 30 días) y los cambios. Un PR más viejo que lo guardado
+    (`pr_updated_at`) no lo pisa; un push nuevo cambia el head y resetea el
+    CI; `ci_status` es el agregado de `ci_suites` (un fallido gana).
+  - Nunca mueve issues (las automatizaciones del ADR 0008 son la parte 2).
+  - Ningún secreto en la base ni en respuestas: `credential_ref` es el
+    nombre de una variable `TEKITLA_GITLAB_TOKEN_*`, el secreto `tkw_` se
+    guarda hasheado. `ReceiveWebhook` y `ConnectOrganization` no se loguean
+    con payload. `make test-pg` prueba el repo contra Postgres 16 real.
 - `ImportIssue` (025): idempotente por `source_key` (única por proyecto),
   con el lock del proyecto. Crea con el número del origen
   (`ISSUE_NUMBER_TAKEN` si ya es de otro) y deja `next_issue_number` mayor;
@@ -454,7 +483,7 @@ git tag prod-v0.1.0 && git push origin prod-v0.1.0   # prod, automático salvo m
 
 ## Protos
 
-Repo de protos: `github.com/tekitla/tekitla-protos`, hoy en `v0.10.0`
+Repo de protos: `github.com/tekitla/tekitla-protos`, hoy en `v0.11.0`
 (`go.mod`). Paquete Go `github.com/tekitla/tekitla-protos/gen/go/issues/v1`
 (alias `issuesv1`), usado solo en `handler/`, `mapper/` y `cli/main.go`.
 

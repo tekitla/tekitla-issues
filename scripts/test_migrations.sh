@@ -4,7 +4,7 @@
 # =============================================================================
 # Aplica migrations/*.up.sql en orden y, antes de cada migración con backfill,
 # carga datos de la versión anterior para verificar que el backfill los deja
-# bien. Al final prueba down -> up de cada una que lo pide (hoy 000005, 000006, 000007, 000008 y 000009). No toca ninguna base real:
+# bien. Al final prueba down -> up de cada una que lo pide (hoy 000005 a 000010). No toca ninguna base real:
 # levanta un contenedor propio y lo borra al terminar.
 #
 #   scripts/test_migrations.sh        (o `make test-migrations`)
@@ -343,6 +343,63 @@ must_fail "down: sessions:write rechazado otra vez" "$(tok post 06 "ARRAY['sessi
 
 apply 000009_agent_sessions.up
 check "up de nuevo: tabla vacía" "0" "SELECT count(*) FROM issues.agent_sessions"
+
+echo "== 000010: integración con GitHub y GitLab (issue 016)"
+PROJECTS_BEFORE_10="$(sql "SELECT count(*) FROM issues.projects")"
+ISSUES_BEFORE_10="$(sql "SELECT count(*) FROM issues.issues")"
+apply 000010_integrations.up
+check "000010: no toca proyectos ni issues" "$PROJECTS_BEFORE_10|$ISSUES_BEFORE_10" "SELECT (SELECT count(*) FROM issues.projects), (SELECT count(*) FROM issues.issues)"
+P10="00000000-0000-4000-8000-0000000000a1"
+I10="$(sql "SELECT id FROM issues.issues WHERE project_id = '$P10' ORDER BY number LIMIT 1")"
+conn() { # conn <id> <provider> <owner> <installation_id|NULL> <credential_ref|NULL> <hash|NULL> <sync|NULL> <poll|NULL> <scope> <topic|NULL> <selected>
+  echo "INSERT INTO issues.repo_connections (id, project_id, provider, host, owner, installation_id, credential_ref,
+    webhook_secret_hash, sync_mode, poll_interval_min, scope, topic, selected, created_by_uid, created_at)
+    VALUES ('00000000-0000-4000-8000-00000000c0$1', '$P10', '$2', 'x.example', '$3', $4, $5, $6, $7, $8, '$9', ${10}, ${11}, 'u1', now())"
+}
+H32="decode(repeat('0a', 32), 'hex')"
+sql "$(conn 01 github acme 77 NULL NULL NULL NULL topic "'tekitla'" "'{}'")"
+sql "$(conn 02 gitlab grupo/a NULL "'TEKITLA_GITLAB_TOKEN_ROUND'" "$H32" "'webhook'" NULL all NULL "'{}'")"
+sql "$(conn 03 gitlab grupo/b NULL "'TEKITLA_GITLAB_TOKEN_ROUND'" NULL "'poll'" 5 selected NULL "ARRAY['api']")"
+echo "ok   conexiones github (topic), gitlab webhook y gitlab poll"
+must_fail "misma org dos veces" "$(conn 04 github acme 78 NULL NULL NULL NULL all NULL "'{}'")"
+must_fail "github sin instalación" "$(conn 05 github otra NULL NULL NULL NULL NULL all NULL "'{}'")"
+must_fail "github con token" "$(conn 06 github otra2 7 "'TEKITLA_GITLAB_TOKEN_X'" NULL NULL NULL all NULL "'{}'")"
+must_fail "credential_ref a otra variable" "$(conn 07 gitlab g/c NULL "'DATABASE_URL'" "$H32" "'webhook'" NULL all NULL "'{}'")"
+must_fail "gitlab webhook sin hash" "$(conn 08 gitlab g/d NULL "'TEKITLA_GITLAB_TOKEN_X'" NULL "'webhook'" NULL all NULL "'{}'")"
+must_fail "gitlab poll con hash" "$(conn 09 gitlab g/e NULL "'TEKITLA_GITLAB_TOKEN_X'" "decode(repeat('0b', 32), 'hex')" "'poll'" 5 all NULL "'{}'")"
+must_fail "gitlab poll cada minuto" "$(conn 10 gitlab g/f NULL "'TEKITLA_GITLAB_TOKEN_X'" NULL "'poll'" 1 all NULL "'{}'")"
+must_fail "mismo hash en dos conexiones" "$(conn 11 gitlab g/g NULL "'TEKITLA_GITLAB_TOKEN_X'" "$H32" "'webhook'" NULL all NULL "'{}'")"
+must_fail "topic sin valor" "$(conn 14 github otra5 9 NULL NULL NULL NULL topic NULL "'{}'")"
+must_fail "topic inválido" "$(conn 12 github otra3 9 NULL NULL NULL NULL topic "'Con Espacio'" "'{}'")"
+must_fail "selección vacía" "$(conn 13 github otra4 9 NULL NULL NULL NULL selected NULL "'{}'")"
+sql "INSERT INTO issues.repositories (id, connection_id, project_id, external_id, owner, name, default_branch)
+  VALUES ('00000000-0000-4000-8000-00000000d001', '00000000-0000-4000-8000-00000000c001', '$P10', 101, 'acme', 'api', 'main')"
+must_fail "mismo repo dos veces en la conexión" "INSERT INTO issues.repositories (id, connection_id, project_id, external_id, owner, name, default_branch)
+  VALUES (gen_random_uuid(), '00000000-0000-4000-8000-00000000c001', '$P10', 101, 'acme', 'api2', 'main')"
+lnk() { # lnk <id> <branch> <sha|NULL> <pr_number|NULL> <pr_state> <ci> [title]
+  echo "INSERT INTO issues.issue_links (id, issue_id, repository_id, branch, head_sha, pr_number, pr_state, ci_status, origin, head_title, updated_at)
+    VALUES ('00000000-0000-4000-8000-00000000e0$1', '$I10', '00000000-0000-4000-8000-00000000d001', '$2', $3, $4, '$5', '$6', 'branch_name', '${7:-}', now())"
+}
+sql "$(lnk 01 feat/tk-1-a "'$(printf 'a%.0s' $(seq 40))'" 7 open failed)"
+echo "ok   link con PR y CI"
+must_fail "link repetido (issue, repo, rama)" "$(lnk 02 feat/tk-1-a NULL NULL none none)"
+must_fail "sha mal formado" "$(lnk 03 b "'ABC'" NULL none none)"
+must_fail "PR sin número" "$(lnk 04 c NULL NULL open none)"
+must_fail "número sin PR" "$(lnk 05 d NULL 3 none none)"
+must_fail "ci desconocido" "$(lnk 06 e NULL NULL none rojo)"
+must_fail "título del commit largo" "$(lnk 07 f NULL NULL none none "$(printf 'x%.0s' $(seq 121))")"
+sql "INSERT INTO issues.webhook_deliveries (provider, delivery_id, event, received_at) VALUES ('github', 'd1', 'push', now())"
+must_fail "entrega repetida" "INSERT INTO issues.webhook_deliveries (provider, delivery_id, event, received_at) VALUES ('github', 'd1', 'push', now())"
+sql "DELETE FROM issues.repo_connections WHERE id = '00000000-0000-4000-8000-00000000c001'"
+check "borrar la conexión borra repos y links" "0|0" "SELECT (SELECT count(*) FROM issues.repositories), (SELECT count(*) FROM issues.issue_links)"
+must_fail "un proyecto con conexiones no se borra" "DELETE FROM issues.projects WHERE id = '$P10'"
+
+apply 000010_integrations.down
+check "down: sin las tablas" "0" "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'issues'
+  AND table_name IN ('repo_connections', 'repositories', 'issue_links', 'webhook_deliveries')"
+check "down: proyectos e issues se conservan" "$PROJECTS_BEFORE_10|$ISSUES_BEFORE_10" "SELECT (SELECT count(*) FROM issues.projects), (SELECT count(*) FROM issues.issues)"
+apply 000010_integrations.up
+check "up de nuevo: tablas vacías" "0" "SELECT count(*) FROM issues.repo_connections"
 
 if [ "$fails" -ne 0 ]; then echo "Migraciones: con fallas"; exit 1; fi
 echo "Migraciones: todo ok"

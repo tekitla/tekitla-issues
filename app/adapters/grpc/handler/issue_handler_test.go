@@ -208,7 +208,13 @@ type clients struct {
 	sessions issuesv1.AgentSessionServiceClient
 	share    issuesv1.ShareLinkServiceClient
 	shared   issuesv1.SharedProjectServiceClient
-	store    *memStore
+	// Issue 016: repos, links y webhooks, con su repo en memoria y la App
+	// falsa.
+	repos  issuesv1.RepositoryServiceClient
+	hooks  issuesv1.WebhookServiceClient
+	integr *memIntegrations
+	gh     *fakeGitHub
+	store  *memStore
 	// clock: el reloj del servicio de sesiones (los tests lo adelantan).
 	clock *testClock
 }
@@ -243,6 +249,10 @@ func newClients(t *testing.T) clients {
 	shareSvc := application.NewShareLinkService(workspaces, projects, memShareLinks{store}, issues, statuses, labels, actors)
 	issuesv1.RegisterShareLinkServiceServer(srv, handler.NewShareLinkHandler(zap.NewNop(), shareSvc))
 	issuesv1.RegisterSharedProjectServiceServer(srv, handler.NewSharedProjectHandler(zap.NewNop(), shareSvc))
+	integr, gh := newMemIntegrations(store), newFakeGitHub()
+	integrSvc := application.NewIntegrationService(workspaces, projects, integr, gh)
+	issuesv1.RegisterRepositoryServiceServer(srv, handler.NewRepositoryHandler(zap.NewNop(), integrSvc))
+	issuesv1.RegisterWebhookServiceServer(srv, handler.NewWebhookHandler(zap.NewNop(), integrSvc))
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
 
@@ -263,6 +273,10 @@ func newClients(t *testing.T) clients {
 		clock:    clock,
 		share:    issuesv1.NewShareLinkServiceClient(conn),
 		shared:   issuesv1.NewSharedProjectServiceClient(conn),
+		repos:    issuesv1.NewRepositoryServiceClient(conn),
+		hooks:    issuesv1.NewWebhookServiceClient(conn),
+		integr:   integr,
+		gh:       gh,
 	}
 }
 

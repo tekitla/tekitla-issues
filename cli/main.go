@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 	// Zonas IANA embebidas: GetFlowMetrics arma las semanas por zona (036) y
@@ -25,9 +26,12 @@ import (
 	"github.com/tekitla/tekitla-issues/app/adapters/grpc/handler"
 	"github.com/tekitla/tekitla-issues/app/adapters/grpc/interceptor"
 	"github.com/tekitla/tekitla-issues/app/application"
+	"github.com/tekitla/tekitla-issues/app/domain/port"
 	"github.com/tekitla/tekitla-issues/app/infra/bootstrap"
+	"github.com/tekitla/tekitla-issues/app/infra/config"
 	"github.com/tekitla/tekitla-issues/app/infra/postgres"
 	"github.com/tekitla/tekitla-issues/app/infra/telemetry"
+	"github.com/tekitla/tekitla-issues/app/integrations/github"
 )
 
 func main() {
@@ -57,6 +61,7 @@ func main() {
 	flowRepo := postgres.NewFlowRepository(infra.DB)
 	sessionRepo := postgres.NewAgentSessionRepository(infra.DB)
 	shareLinkRepo := postgres.NewShareLinkRepository(infra.DB)
+	integrationRepo := postgres.NewIntegrationRepository(infra.DB)
 
 	// 4. Servicios de aplicación
 	projectSvc := application.NewProjectService(workspaceRepo, projectRepo)
@@ -67,6 +72,7 @@ func main() {
 	flowSvc := application.NewFlowService(workspaceRepo, projectRepo, labelRepo, flowRepo)
 	sessionSvc := application.NewAgentSessionService(workspaceRepo, actorRepo, sessionRepo, infra.Config.SessionStallAfter)
 	shareLinkSvc := application.NewShareLinkService(workspaceRepo, projectRepo, shareLinkRepo, issueRepo, statusRepo, labelRepo, actorRepo)
+	integrationSvc := application.NewIntegrationService(workspaceRepo, projectRepo, integrationRepo, githubApp(infra.Config, infra.Logger))
 
 	// 5. Handlers gRPC
 	issueHandler := handler.NewIssueHandler(infra.Logger, projectSvc, issueSvc, statusSvc, labelSvc, flowSvc).WithSessions(sessionSvc)
@@ -75,6 +81,8 @@ func main() {
 	sessionHandler := handler.NewAgentSessionHandler(infra.Logger, sessionSvc)
 	shareLinkHandler := handler.NewShareLinkHandler(infra.Logger, shareLinkSvc)
 	sharedProjectHandler := handler.NewSharedProjectHandler(infra.Logger, shareLinkSvc)
+	repositoryHandler := handler.NewRepositoryHandler(infra.Logger, integrationSvc)
+	webhookHandler := handler.NewWebhookHandler(infra.Logger, integrationSvc)
 
 	// 6. Servidor gRPC
 	grpcServer := grpc.NewServer(
@@ -87,6 +95,9 @@ func main() {
 	issuesv1.RegisterTokenAuthServiceServer(grpcServer, tokenAuthHandler)
 	issuesv1.RegisterShareLinkServiceServer(grpcServer, shareLinkHandler)
 	issuesv1.RegisterSharedProjectServiceServer(grpcServer, sharedProjectHandler)
+	issuesv1.RegisterRepositoryServiceServer(grpcServer, repositoryHandler)
+	// Interno: lo llama solo el handler de webhooks del gateway.
+	issuesv1.RegisterWebhookServiceServer(grpcServer, webhookHandler)
 
 	// Health: lo usan los probes de Cloud Run y el healthcheck de docker compose.
 	healthSrv := health.NewServer()
@@ -135,4 +146,32 @@ func main() {
 		infra.Logger.Warn("shutdown timeout, forcing stop")
 		grpcServer.Stop()
 	}
+}
+
+// githubApp arma la GitHub App del ambiente (issue 016). Sin ninguna
+// variable GITHUB_APP_* la integración queda apagada (nil); con alguna pero
+// incompleta o inválida, el servicio no arranca: es un error de
+// configuración, no algo que tenga que pasar en silencio. Devuelve la
+// interfaz (no *github.App) para que «apagada» sea un nil de verdad.
+func githubApp(cfg *config.Config, logger *zap.Logger) port.GitHubApp {
+	if cfg.GitHubAppID == "" && cfg.GitHubAppSlug == "" && cfg.GitHubAppPrivateKey == "" && cfg.GitHubWebhookSecret == "" {
+		logger.Info("GitHub integration disabled (no GITHUB_APP_* variables)")
+		return nil
+	}
+	appID, err := strconv.ParseInt(cfg.GitHubAppID, 10, 64)
+	if err != nil {
+		logger.Fatal("GITHUB_APP_ID must be a number")
+	}
+	key, err := github.DecodePrivateKey(cfg.GitHubAppPrivateKey)
+	if err != nil {
+		logger.Fatal("invalid GitHub App configuration", zap.Error(err))
+	}
+	app, err := github.New(github.Config{
+		AppID: appID, Slug: cfg.GitHubAppSlug, PrivateKeyPEM: key, WebhookSecret: []byte(cfg.GitHubWebhookSecret),
+	})
+	if err != nil {
+		logger.Fatal("invalid GitHub App configuration", zap.Error(err))
+	}
+	logger.Info("GitHub integration enabled", zap.String("app_slug", cfg.GitHubAppSlug))
+	return app
 }
