@@ -48,6 +48,37 @@ func (s memFlow) ListFlowIssues(_ context.Context, projectID string, labelIDs []
 	return out, nil
 }
 
+// ListSessionTracks lee la historia que dejó memSessions.Report.
+func (s memFlow) ListSessionTracks(_ context.Context, projectID string, number int32, to time.Time) ([]model.SessionTrack, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	linked := map[string]bool{}
+	for _, t := range s.transitions {
+		if t.ProjectID == projectID && (number == 0 || t.IssueNumber == number) {
+			linked[t.SessionID] = true
+		}
+	}
+	byID := map[string]*model.SessionTrack{}
+	var order []string
+	for _, t := range s.transitions {
+		if !linked[t.SessionID] || t.At.After(to) {
+			continue
+		}
+		tr, ok := byID[t.SessionID]
+		if !ok {
+			tr = &model.SessionTrack{SessionID: t.SessionID, LastSeenAt: s.lastSeen[t.SessionID]}
+			byID[t.SessionID] = tr
+			order = append(order, t.SessionID)
+		}
+		tr.Transitions = append(tr.Transitions, t)
+	}
+	out := make([]model.SessionTrack, len(order))
+	for i, id := range order {
+		out[i] = *byID[id]
+	}
+	return out, nil
+}
+
 func hasAny(have, want []string) bool {
 	for _, h := range have {
 		for _, w := range want {

@@ -136,3 +136,69 @@ func TestGetFlowMetrics_FutureTo(t *testing.T) {
 		t.Errorf("to = %v, quiero ahora (%v)", res.To, flowNow)
 	}
 }
+
+// Issue 036, parte 3: GetIssueFlowEfficiency y la parte de sesiones de
+// GetFlowMetrics (datos inventados).
+
+func issueFlowRepo(tracks []model.SessionTrack, tracksErr error) *mockFlowRepo {
+	return &mockFlowRepo{
+		listFn: func(context.Context, string, []string) ([]model.FlowIssue, error) {
+			return []model.FlowIssue{{Number: 7, State: model.IssueStateInProgress, CreatedAt: flowNow.AddDate(0, 0, -3)}}, nil
+		},
+		tracksFn: func(context.Context, string, int32, time.Time) ([]model.SessionTrack, error) {
+			return tracks, tracksErr
+		},
+	}
+}
+
+func TestGetIssueFlowEfficiency(t *testing.T) {
+	ctx := context.Background()
+	at := func(h int) time.Time { return flowNow.Add(time.Duration(h-24) * time.Hour) }
+	tracks := []model.SessionTrack{{SessionID: "s1", LastSeenAt: flowNow, Transitions: []model.SessionTransition{
+		{SessionID: "s1", At: at(10), Status: model.SessionWorking, WaitingOn: model.WaitingNone, ProjectID: validID, IssueNumber: 7},
+		{SessionID: "s1", At: at(13), Status: model.SessionWaitingOK, WaitingOn: model.WaitingNone, ProjectID: validID, IssueNumber: 7},
+		{SessionID: "s1", At: at(18), Status: model.SessionWorking, WaitingOn: model.WaitingNone, ProjectID: validID, IssueNumber: 7},
+	}}}
+	svc := newFlowService(issueFlowRepo(tracks, nil))
+
+	// CU-036-6 hasta el momento de la respuesta: 3 h trabajando y 5 h
+	// esperando; la respuesta justo en to no deja la espera pendiente.
+	res, err := svc.GetIssueFlowEfficiency(ctx, owner, application.IssueFlowInput{ProjectID: validID, Number: 7, To: at(18)})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	bp, ok := res.Efficiency.EfficiencyBP()
+	if !res.Has || !ok || bp != 3750 || res.Efficiency.WaitingHuman != 5*time.Hour || res.Queue.Pending != 0 {
+		t.Errorf("CU-036-6: %+v (bp %d)", res, bp)
+	}
+
+	// Un to anterior al alta, sin from: vacío, no un error sobre from.
+	res, err = svc.GetIssueFlowEfficiency(ctx, owner, application.IssueFlowInput{ProjectID: validID, Number: 7, To: flowNow.AddDate(0, 0, -10)})
+	if err != nil || res.Has {
+		t.Errorf("to before created: %+v, %v", res, err)
+	}
+
+	for name, in := range map[string]application.IssueFlowInput{
+		"número inválido":    {ProjectID: validID, Number: 0},
+		"from después de to": {ProjectID: validID, Number: 7, From: flowNow.Add(-time.Hour), To: flowNow.Add(-2 * time.Hour)},
+	} {
+		if _, err := svc.GetIssueFlowEfficiency(ctx, owner, in); !domainerrors.IsValidation(err) {
+			t.Errorf("%s: want validation, got %v", name, err)
+		}
+	}
+	if _, err := svc.GetIssueFlowEfficiency(ctx, owner, application.IssueFlowInput{ProjectID: validID, Number: 99}); !domainerrors.IsNotFound(err) {
+		t.Errorf("unknown issue: want not found, got %v", err)
+	}
+}
+
+func TestFlowSessions_RepoErrorsPropagate(t *testing.T) {
+	ctx := context.Background()
+	boom := errors.New("boom")
+	svc := newFlowService(issueFlowRepo(nil, boom))
+	if _, err := svc.GetIssueFlowEfficiency(ctx, owner, application.IssueFlowInput{ProjectID: validID, Number: 7}); !errors.Is(err, boom) {
+		t.Errorf("GetIssueFlowEfficiency: want boom, got %v", err)
+	}
+	if _, err := svc.GetFlowMetrics(ctx, owner, application.FlowMetricsInput{ProjectID: validID}); !errors.Is(err, boom) {
+		t.Errorf("GetFlowMetrics: want boom, got %v", err)
+	}
+}

@@ -12,20 +12,31 @@ import (
 
 // FlowService calcula las métricas de flujo de un proyecto (issue 036).
 type FlowService struct {
-	guard  projectGuard
-	labels port.LabelRepository
-	flow   port.FlowRepository
-	now    func() time.Time
+	guard      projectGuard
+	labels     port.LabelRepository
+	flow       port.FlowRepository
+	stallAfter time.Duration
+	now        func() time.Time
 }
 
 // NewFlowService construye el servicio.
 func NewFlowService(workspaceRepo port.WorkspaceRepository, projects port.ProjectRepository, labels port.LabelRepository, flow port.FlowRepository) *FlowService {
 	return &FlowService{
-		guard:  projectGuard{workspaces: workspaces{repo: workspaceRepo}, projects: projects},
-		labels: labels,
-		flow:   flow,
-		now:    utcNow,
+		guard:      projectGuard{workspaces: workspaces{repo: workspaceRepo}, projects: projects},
+		labels:     labels,
+		flow:       flow,
+		stallAfter: model.DefaultSessionStallAfter,
+		now:        utcNow,
 	}
+}
+
+// WithStallAfter fija el umbral sin reportes desde el que una sesión deja de
+// contar (SESSION_STALL_AFTER, el mismo de «colgado»). <= 0 no cambia nada.
+func (s *FlowService) WithStallAfter(d time.Duration) *FlowService {
+	if d > 0 {
+		s.stallAfter = d
+	}
+	return s
 }
 
 // WithClock fija el reloj (tests).
@@ -50,6 +61,10 @@ type FlowMetricsResult struct {
 	TimeZone      string
 	ValueLabelIDs []string
 	Metrics       model.FlowMetrics
+	// Sessions: eficiencia y cola humana por semana (issue 036, parte 3).
+	Sessions model.SessionFlow
+	// Signal: la señal de contratación de las 8 semanas antes de To.
+	Signal model.HiringSignal
 }
 
 // GetFlowMetrics valida el período y las opciones, lee el proyecto y
@@ -80,10 +95,105 @@ func (s *FlowService) GetFlowMetrics(ctx context.Context, ownerUID string, in Fl
 	if err != nil {
 		return nil, err
 	}
-	return &FlowMetricsResult{
+	res := &FlowMetricsResult{
 		From: q.From, To: q.To, TimeZone: tz, ValueLabelIDs: q.ValueLabelIDs,
 		Metrics: model.ComputeFlowMetrics(issues, q),
-	}, nil
+	}
+
+	// Parte 3: las sesiones de los mismos issues (con el filtro de
+	// etiquetas). La historia empieza en el proyecto, no en el filtro.
+	tracks, err := s.flow.ListSessionTracks(ctx, in.ProjectID, 0, q.To)
+	if err != nil {
+		return nil, err
+	}
+	known := make(map[int32]bool, len(issues))
+	for _, is := range issues {
+		known[is.Number] = true
+	}
+	keep := func(k model.IssueKey) bool { return k.ProjectID == in.ProjectID && known[k.Number] }
+	now := s.now()
+	segs := model.IssueSegments(tracks, keep, now, s.stallAfter)
+	since, hasSince := model.RecordedSince(tracks, in.ProjectID, 0)
+	res.Sessions = model.ComputeSessionWeeks(segs, model.FlowWeekBounds(q.From, q.To, q.Location), since, hasSince, now)
+
+	sigFrom, sigTo := model.SignalBounds(q.To, q.Location)
+	sq := q
+	sq.From, sq.To, sq.StaleMax = sigFrom, sigTo, 0
+	res.Signal = model.ComputeHiringSignal(model.ComputeFlowMetrics(issues, sq).Weeks, segs, since, hasSince, now)
+	return res, nil
+}
+
+// IssueFlowInput son los parámetros de GetIssueFlowEfficiency. Cero = por
+// defecto.
+type IssueFlowInput struct {
+	ProjectID string
+	Number    int32
+	From, To  time.Time
+}
+
+// IssueFlowResult es la eficiencia de un issue en el período. Has: el issue
+// tiene historia de sesiones antes de To.
+type IssueFlowResult struct {
+	Has           bool
+	Efficiency    model.FlowEfficiency
+	Queue         model.HumanQueue
+	RecordedSince time.Time
+	HasSince      bool
+}
+
+// GetIssueFlowEfficiency calcula dónde se fue el tiempo de un issue según
+// sus sesiones (CU-036-6).
+func (s *FlowService) GetIssueFlowEfficiency(ctx context.Context, ownerUID string, in IssueFlowInput) (*IssueFlowResult, error) {
+	if _, err := s.guard.ensure(ctx, ownerUID, in.ProjectID); err != nil {
+		return nil, err
+	}
+	if in.Number <= 0 {
+		return nil, domainerrors.ValidationError("number must be positive", map[string]any{"field": "number"})
+	}
+	issues, err := s.flow.ListFlowIssues(ctx, in.ProjectID, nil)
+	if err != nil {
+		return nil, err
+	}
+	var issue *model.FlowIssue
+	for i := range issues {
+		if issues[i].Number == in.Number {
+			issue = &issues[i]
+		}
+	}
+	if issue == nil {
+		return nil, domainerrors.NotFoundError("issue not found", map[string]any{"project_id": in.ProjectID, "number": in.Number})
+	}
+	now := s.now()
+	to := in.To
+	if to.IsZero() || to.After(now) {
+		to = now
+	}
+	from := in.From
+	if from.IsZero() {
+		// Sin from, desde el alta: un to anterior es un período vacío, no un
+		// error sobre un campo que no vino.
+		if !issue.CreatedAt.Before(to) {
+			return &IssueFlowResult{}, nil
+		}
+		from = issue.CreatedAt
+	}
+	if !from.Before(to) {
+		return nil, domainerrors.ValidationError("from must be before to", map[string]any{"field": "from"}).WithReason("INVALID_PERIOD")
+	}
+	tracks, err := s.flow.ListSessionTracks(ctx, in.ProjectID, in.Number, to)
+	if err != nil {
+		return nil, err
+	}
+	key := model.IssueKey{ProjectID: in.ProjectID, Number: in.Number}
+	segs := model.IssueSegments(tracks, func(k model.IssueKey) bool { return k == key }, now, s.stallAfter)
+	res := &IssueFlowResult{}
+	res.RecordedSince, res.HasSince = model.RecordedSince(tracks, in.ProjectID, in.Number)
+	if res.HasSince && res.RecordedSince.Before(to) {
+		res.Has = true
+		res.Efficiency = model.EfficiencyIn(segs, from, to)
+		res.Queue = model.HumanQueueIn(segs, from, to, now)
+	}
+	return res, nil
 }
 
 func (s *FlowService) flowQuery(in FlowMetricsInput) (model.FlowQuery, string, error) {

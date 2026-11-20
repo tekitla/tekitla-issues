@@ -37,12 +37,38 @@ var sessionLinkFrom = map[issuesv1.SessionLink]model.SessionLink{
 	issuesv1.SessionLink_SESSION_LINK_CWD:        model.SessionLinkCwd,
 }
 
+// Motivo de la espera (issue 036). UNSPECIFIED es «sin motivo».
+var waitingReasonFrom = map[issuesv1.WaitingReason]model.WaitingReason{
+	issuesv1.WaitingReason_WAITING_REASON_UNSPECIFIED: model.WaitingReasonNone,
+	issuesv1.WaitingReason_WAITING_REASON_REVIEW:      model.WaitingReasonReview,
+	issuesv1.WaitingReason_WAITING_REASON_TESTING:     model.WaitingReasonTesting,
+	issuesv1.WaitingReason_WAITING_REASON_DECISION:    model.WaitingReasonDecision,
+	issuesv1.WaitingReason_WAITING_REASON_DEPLOY:      model.WaitingReasonDeploy,
+}
+
 // Mapas inversos, armados una vez.
 var (
 	sessionStatusTo = invert(sessionStatusFrom)
 	waitingOnTo     = invert(waitingOnFrom)
 	sessionLinkTo   = invert(sessionLinkFrom)
+	waitingReasonTo = invert(waitingReasonFrom)
 )
+
+// WaitingReasonToProto convierte el motivo de una espera.
+func WaitingReasonToProto(r model.WaitingReason) issuesv1.WaitingReason {
+	return waitingReasonTo[r] // "" y ausente: UNSPECIFIED (0)
+}
+
+// waitingReasonFromProto: un valor desconocido (un recolector con un proto
+// más nuevo) va sin motivo, como el token desconocido en el recolector. El
+// motivo es informativo: no puede hacer rechazar el reporte de la máquina,
+// que además es su latido.
+func waitingReasonFromProto(r issuesv1.WaitingReason) model.WaitingReason {
+	if v, ok := waitingReasonFrom[r]; ok {
+		return v
+	}
+	return model.WaitingReasonNone
+}
 
 func invert[K comparable, V comparable](m map[K]V) map[V]K {
 	out := make(map[V]K, len(m))
@@ -112,6 +138,7 @@ func ReportInputFromProto(req *issuesv1.ReportSessionsRequest) application.Repor
 			WaitingOn:      waiting,
 			WaitingTarget:  s.GetWaitingTarget(),
 			WaitingText:    s.GetWaitingText(),
+			WaitingReason:  waitingReasonFromProto(s.GetWaitingReason()),
 		}
 	}
 	return in
@@ -171,6 +198,7 @@ func AgentSessionToProto(m *model.AgentSession) *issuesv1.AgentSession {
 		WaitingOn:        WaitingOnToProto(m.WaitingOn),
 		WaitingTarget:    m.WaitingTarget,
 		WaitingText:      m.WaitingText,
+		WaitingReason:    WaitingReasonToProto(m.WaitingReason),
 	}
 	if m.EndedAt != nil {
 		out.EndedAt = TimestampToProto(*m.EndedAt)
@@ -211,6 +239,7 @@ func IssueSessionsToProto(m *model.IssueSessions) *issuesv1.IssueSessions {
 			WaitingOn:        WaitingOnToProto(s.WaitingOn),
 			WaitingTarget:    s.WaitingTarget,
 			StatusChangedAt:  TimestampToProto(s.StatusChangedAt),
+			WaitingReason:    WaitingReasonToProto(s.WaitingReason),
 		})
 	}
 	return out

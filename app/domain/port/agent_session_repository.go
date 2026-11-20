@@ -18,9 +18,10 @@ type AgentSessionRepository interface {
 	FindAgent(ctx context.Context, ownerID string, tool model.AgentTool, name string) (*model.Actor, error)
 	// Report aplica un reporte a las sesiones de key en una transacción,
 	// serializada por key: lee todas las sesiones de la máquina (también
-	// las terminadas), llama a plan y escribe lo que devuelve. now es el
+	// las terminadas) y cuáles de ellas ya tienen historia (issue 036), llama
+	// a plan y escribe lo que devuelve, también sus Transitions. now es el
 	// ended_at de las que no vinieron.
-	Report(ctx context.Context, key model.SessionKey, now time.Time, plan func(existing []*model.AgentSession) model.ReportOutcome) (model.ReportOutcome, error)
+	Report(ctx context.Context, key model.SessionKey, now time.Time, plan func(existing []*model.AgentSession, history map[string]bool) model.ReportOutcome) (model.ReportOutcome, error)
 	// List devuelve las sesiones de ownerID con filtro, por last_seen_at
 	// descendente (id de desempate).
 	List(ctx context.Context, filter AgentSessionFilter) (*AgentSessionPage, error)

@@ -15,7 +15,7 @@ import (
 type mockSessionRepo struct {
 	projectIDsFn    func(ctx context.Context, workspaceIDs, keys []string) (map[string]string, error)
 	findAgentFn     func(ctx context.Context, ownerID string, tool model.AgentTool, name string) (*model.Actor, error)
-	reportFn        func(ctx context.Context, key model.SessionKey, now time.Time, plan func([]*model.AgentSession) model.ReportOutcome) (model.ReportOutcome, error)
+	reportFn        func(ctx context.Context, key model.SessionKey, now time.Time, plan func([]*model.AgentSession, map[string]bool) model.ReportOutcome) (model.ReportOutcome, error)
 	listFn          func(ctx context.Context, f port.AgentSessionFilter) (*port.AgentSessionPage, error)
 	listForIssuesFn func(ctx context.Context, projectID string, numbers []int32, since time.Time) ([]*model.AgentSession, error)
 }
@@ -36,9 +36,9 @@ func (m *mockSessionRepo) FindAgent(ctx context.Context, ownerID string, tool mo
 	return m.findAgentFn(ctx, ownerID, tool, name)
 }
 
-func (m *mockSessionRepo) Report(ctx context.Context, key model.SessionKey, now time.Time, plan func([]*model.AgentSession) model.ReportOutcome) (model.ReportOutcome, error) {
+func (m *mockSessionRepo) Report(ctx context.Context, key model.SessionKey, now time.Time, plan func([]*model.AgentSession, map[string]bool) model.ReportOutcome) (model.ReportOutcome, error) {
 	if m.reportFn == nil {
-		return plan(nil), nil
+		return plan(nil, nil), nil
 	}
 	return m.reportFn(ctx, key, now, plan)
 }
@@ -85,11 +85,11 @@ func TestAgentSessionService_Report_CreatesAgentAndResolvesProject(t *testing.T)
 			}
 			return map[string]string{"TK": "p-tk"}, nil
 		},
-		reportFn: func(_ context.Context, key model.SessionKey, _ time.Time, plan func([]*model.AgentSession) model.ReportOutcome) (model.ReportOutcome, error) {
+		reportFn: func(_ context.Context, key model.SessionKey, _ time.Time, plan func([]*model.AgentSession, map[string]bool) model.ReportOutcome) (model.ReportOutcome, error) {
 			if key.Machine != "PC-01" || key.Source != model.SessionSourceHerdr {
 				t.Errorf("key: %+v", key)
 			}
-			planned = plan(nil)
+			planned = plan(nil, nil)
 			return planned, nil
 		},
 	}
@@ -147,7 +147,7 @@ func TestAgentSessionService_Report_PropagatesRepoErrors(t *testing.T) {
 	cases := map[string]*mockSessionRepo{
 		"projects": {projectIDsFn: func(context.Context, []string, []string) (map[string]string, error) { return nil, boom }},
 		"agent":    {findAgentFn: func(context.Context, string, model.AgentTool, string) (*model.Actor, error) { return nil, boom }},
-		"report": {reportFn: func(context.Context, model.SessionKey, time.Time, func([]*model.AgentSession) model.ReportOutcome) (model.ReportOutcome, error) {
+		"report": {reportFn: func(context.Context, model.SessionKey, time.Time, func([]*model.AgentSession, map[string]bool) model.ReportOutcome) (model.ReportOutcome, error) {
 			return model.ReportOutcome{}, boom
 		}},
 	}

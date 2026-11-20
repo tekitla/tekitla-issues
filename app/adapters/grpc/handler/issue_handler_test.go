@@ -46,6 +46,10 @@ type memStore struct {
 	actors     []*model.Actor
 	tokens     []*memToken
 	shareLinks []*memShareLink
+	// Historia de sesiones (036): la escribe memSessions.Report y la lee
+	// memFlow.ListSessionTracks, con el último reporte de cada sesión.
+	transitions []model.SessionTransition
+	lastSeen    map[string]time.Time
 }
 
 func newMemStore() *memStore {
@@ -53,6 +57,7 @@ func newMemStore() *memStore {
 		workspaces: map[string]*model.Workspace{},
 		projects:   map[string]*model.Project{},
 		next:       map[string]int32{},
+		lastSeen:   map[string]time.Time{},
 	}
 }
 
@@ -236,8 +241,10 @@ func newClients(t *testing.T) clients {
 		application.NewLabelService(workspaces, projects, labels),
 		// Reloj un minuto adelante: con el de Windows (~1 ms) el «ahora» puede
 		// ser igual a la fecha de los eventos recién creados, y to es exclusivo.
+		// Es el reloj de las sesiones (036): los tests de eficiencia lo
+		// adelantan.
 		application.NewFlowService(workspaces, projects, labels, memFlow{store}).
-			WithClock(func() time.Time { return time.Now().UTC().Add(time.Minute) }),
+			WithClock(func() time.Time { return clock.now().Add(time.Minute) }),
 	).WithSessions(sessionSvc)
 
 	lis := bufconn.Listen(1 << 20)

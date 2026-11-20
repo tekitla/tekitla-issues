@@ -16,7 +16,8 @@ el recolector de herdr (026) e integración con GitHub y GitLab (016).
   (`gen/go/issues/v1`): proyectos, issues (`ListIssues`, `GetIssue`,
   `CreateIssue`, `MoveIssue`, `UpdateIssue`, `DiscardIssue`, `RestoreIssue`),
   estados (con `BatchUpdateStatuses`), etiquetas, `CreateComment`,
-  `ListIssueEvents`, `ImportIssue`, `ImportIssueEvents` y `GetFlowMetrics`; `issues.v1.ActorService` (agentes y
+  `ListIssueEvents`, `ImportIssue`, `ImportIssueEvents`, `GetFlowMetrics` y
+  `GetIssueFlowEfficiency`; `issues.v1.ActorService` (agentes y
   tokens), `issues.v1.AgentSessionService` (`ReportSessions`,
   `ListAgentSessions`, 026), `issues.v1.TokenAuthService` (`ResolveToken`,
   interno), `issues.v1.ShareLinkService` (gestión de enlaces de solo
@@ -126,6 +127,32 @@ Reglas de negocio no obvias:
     no son actividad (el backfill dejó los de RND con la fecha de la corrida).
   - Confianza: `RECORDED` si todo es en vivo, `APPROXIMATE` si algo es
     importado.
+- Eficiencia del flujo, cola humana y señal de contratación (036 parte 3,
+  `000011`; el comentario de `FlowEfficiency`, `HumanQueue` y `HiringSignal`
+  en `flow_metrics.proto` es la especificación). Cálculo puro en
+  `model/session_flow.go` sobre `FlowRepository.ListSessionTracks`:
+  - Historia: `ReportSessions` escribe `issues.agent_session_transitions`
+    (`model.PlanTransitions`, en la misma transacción): alta o reapertura,
+    cambio de estado, espera, motivo o issue; una sesión sin historia (de
+    antes de `000011`) recibe una fila de base en su primer reporte; un hueco
+    de más de `SESSION_STALL_AFTER` deja una fila `unreported` en el último
+    reporte; una que termina, `ended`. Los latidos no escriben.
+  - Tramos por issue (`model.IssueSegments`): tiempo de reloj, en cada
+    instante el estado de mayor prioridad entre sus sesiones (trabajando >
+    espera a una persona > bloqueado > en revisión > en reposo). Espera a
+    una persona: `waiting_on` `person`, o `waiting_ok` sin espera. El último
+    tramo de una sesión llega a ahora, o a su último reporte si no reporta
+    hace más del umbral. Cuentan las sesiones de cualquier persona,
+    ligadas a issues que existen (y con el filtro de etiquetas).
+  - Cola humana: una espera termina con respuesta si el issue pasa a otro
+    estado sin hueco; cortada por un hueco no es respuesta.
+  - Semanas que terminan antes de la primera transición del proyecto:
+    sin `efficiency` ni `human_queue`.
+  - Señal: las 8 semanas completas antes de `to` (`model.SignalBounds`), con
+    sus WIP y cerrados de `ComputeFlowMetrics` y la eficiencia de los
+    tramos. Umbrales en constantes de `session_flow.go`.
+  - `GetIssueFlowEfficiency`: issue inexistente → `NOT_FOUND`; sin `from`,
+    desde el alta; sin historia en el período, la respuesta va vacía.
 - Actores (025): una persona por uid (`issues.actors.user_uid` único), creada
   la primera vez que hace falta (`ActorRepository.EnsurePerson`, `ON CONFLICT
   DO NOTHING`); su `display_name` es vacío (el servicio no conoce nombres).
@@ -206,6 +233,9 @@ Reglas de negocio no obvias:
     respuesta, índice parcial `agent_sessions_issue_idx`) con
     `model.SummarizeSessions`; la lista (hasta 5) solo en `GetIssue`. Cuenta
     las sesiones de cualquier persona del proyecto.
+  - `waiting_reason` (036, `000011`): `review`, `testing`, `decision`,
+    `deploy` o vacío; se guarda vacío sin espera (`waiting_on` `none` y estado distinto de `waiting_ok`; CHECK
+    `agent_sessions_waiting_reason_none_chk`).
   - Recolector local en `tools/herdr-collector` (ver su `README.md`).
 - Integración con GitHub y GitLab (016, `000010`; plan en el repo docs, el
   comentario de `integrations.proto` es la especificación):
@@ -388,7 +418,9 @@ compose, ver `cli/healthcheck.go`) y reflection fuera de prod.
   `issues.issue_labels` (`imported`), `issues.comments`, `issues.issue_events`
   (`agent_id`), `issues.actors`, `issues.tokens` (solo el hash; scopes
   `issues:read`, `issues:write` y `sessions:write`), `issues.share_links`
-  (solo el hash) e `issues.agent_sessions`. Timestamps
+  (solo el hash), `issues.agent_sessions` e
+  `issues.agent_session_transitions` (historia, PK `session_id, seq`).
+  Timestamps
   truncados a microsegundos en el repo (`dbNow`).
 - JSONB: DTOs unexported separados del dominio + `encoding/json`.
 - Migraciones en `migrations/NNNNNN_desc.{up,down}.sql`, aplicadas a mano
@@ -405,7 +437,9 @@ compose, ver `cli/healthcheck.go`) y reflection fuera de prod.
   parte 2 (`labels.counts_as_value`, `NOT NULL DEFAULT false`: ninguna etiqueta
   existente es de valor), `000008` la del 009 (`share_links`, tabla nueva)
   y `000009` la del 026 (`agent_sessions` y `sessions:write` en el CHECK de
-  `tokens.scopes`). Marcar `import_sync` los
+  `tokens.scopes`) y `000011` la del 036 parte 3
+  (`agent_session_transitions` y `agent_sessions.waiting_reason`, `NOT NULL
+  DEFAULT ''`: ninguna sesión tenía motivo; `000010` es del 016). Marcar `import_sync` los
   eventos viejos de ImportIssue de un proyecto espejo (y alinear su
   «creado» con el alta) es aparte y revisable:
   `scripts/backfill_import_sync.sh <qa|prod> <uid> <clave> [--apply]` (sin
@@ -471,7 +505,10 @@ git tag prod-v0.1.0 && git push origin prod-v0.1.0   # prod, automático salvo m
   lee `labels.counts_as_value`). `000008` es compatible con cualquier
   binario anterior (solo crea una tabla) y va antes del deploy de la imagen
   que la usa. `000009` es compatible con el binario de v0.9 (tabla nueva) y
-  también va antes del deploy de la imagen que la usa.
+  también va antes del deploy de la imagen que la usa. `000011` es
+  compatible con el binario de `prod-v0.8.0` (tabla nueva y una columna con
+  DEFAULT) y va antes del deploy de la imagen que la usa. Sin backfill: la
+  eficiencia se mide desde ese deploy.
 - Release con cambios en `migrations/`: la guarda de prod bloquea. Aplicar el
   SQL por túnel SSH (`scripts/apply_migration.sh prod <migración> --apply`) y
   lanzar el override.
@@ -483,7 +520,7 @@ git tag prod-v0.1.0 && git push origin prod-v0.1.0   # prod, automático salvo m
 
 ## Protos
 
-Repo de protos: `github.com/tekitla/tekitla-protos`, hoy en `v0.11.0`
+Repo de protos: `github.com/tekitla/tekitla-protos`, hoy en `v0.12.0`
 (`go.mod`). Paquete Go `github.com/tekitla/tekitla-protos/gen/go/issues/v1`
 (alias `issuesv1`), usado solo en `handler/`, `mapper/` y `cli/main.go`.
 

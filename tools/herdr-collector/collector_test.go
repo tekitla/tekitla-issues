@@ -144,6 +144,40 @@ func TestDoneKeepsWaiting(t *testing.T) {
 	}
 }
 
+// Issue 036: el motivo sale de espera_motivo, solo si la sesión espera.
+func TestWaitingReason(t *testing.T) {
+	agents := []herdrAgent{
+		agent("r1", "", "idle", "", "w1", map[string]string{"espera_tipo": "persona", "espera_motivo": "revision"}),
+		agent("r2", "", "blocked", "", "w1", map[string]string{"espera_tipo": "otro", "espera_a": "CI", "espera_motivo": "Deploy"}),
+		agent("r3", "", "idle", "", "w1", map[string]string{"espera_tipo": "persona", "espera_motivo": "cafe"}),
+		// Trabajando con tokens viejos: sin espera ni motivo.
+		agent("r4", "", "working", "", "w1", map[string]string{"espera_tipo": "persona", "espera_motivo": "pruebas"}),
+		// Motivo sin espera: no cuenta.
+		agent("r5", "", "idle", "", "w1", map[string]string{"espera_motivo": "decision"}),
+		// esperando-ok sin espera_tipo: sí cuenta.
+		agent("r6", "", "blocked", "", "w1", map[string]string{"espera_motivo": "decision"}),
+	}
+	want := map[string]issuesv1.WaitingReason{
+		"r1": issuesv1.WaitingReason_WAITING_REASON_REVIEW,
+		"r2": issuesv1.WaitingReason_WAITING_REASON_DEPLOY,
+		"r3": issuesv1.WaitingReason_WAITING_REASON_UNSPECIFIED,
+		"r4": issuesv1.WaitingReason_WAITING_REASON_UNSPECIFIED,
+		"r5": issuesv1.WaitingReason_WAITING_REASON_UNSPECIFIED,
+		"r6": issuesv1.WaitingReason_WAITING_REASON_DECISION,
+	}
+	for _, s := range translate(testCfg, agents, nil) {
+		if s.GetWaitingReason() != want[s.GetExternalId()] {
+			t.Errorf("%s: got %v, want %v", s.GetExternalId(), s.GetWaitingReason(), want[s.GetExternalId()])
+		}
+	}
+	if got := reasonOf("pruebas"); got != issuesv1.WaitingReason_WAITING_REASON_TESTING {
+		t.Errorf("pruebas: %v", got)
+	}
+	if got := reasonOf("decision"); got != issuesv1.WaitingReason_WAITING_REASON_DECISION {
+		t.Errorf("decision: %v", got)
+	}
+}
+
 func TestWaitingOfFallback(t *testing.T) {
 	cases := map[string]issuesv1.WaitingOn{
 		"🙋 decisión":       issuesv1.WaitingOn_WAITING_ON_PERSON,

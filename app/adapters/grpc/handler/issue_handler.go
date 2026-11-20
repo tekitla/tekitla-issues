@@ -66,6 +66,26 @@ func (h *IssueHandler) GetFlowMetrics(ctx context.Context, req *issuesv1.GetFlow
 	return mapper.FlowMetricsToProto(res), nil
 }
 
+// GetIssueFlowEfficiency: eficiencia del flujo de un issue según sus
+// sesiones de agentes (issue 036, CU-036-6).
+func (h *IssueHandler) GetIssueFlowEfficiency(ctx context.Context, req *issuesv1.GetIssueFlowEfficiencyRequest) (*issuesv1.GetIssueFlowEfficiencyResponse, error) {
+	uid, err := requireUserID(ctx)
+	if err != nil {
+		return nil, domainerrors.MapToGRPC(err, h.logger)
+	}
+	if req.From != nil && req.GetFrom().CheckValid() != nil {
+		return nil, domainerrors.MapToGRPC(domainerrors.ValidationError("invalid from", map[string]any{"field": "from"}).WithReason("INVALID_PERIOD"), h.logger)
+	}
+	if req.To != nil && req.GetTo().CheckValid() != nil {
+		return nil, domainerrors.MapToGRPC(domainerrors.ValidationError("invalid to", map[string]any{"field": "to"}).WithReason("INVALID_PERIOD"), h.logger)
+	}
+	res, err := h.flowSvc.GetIssueFlowEfficiency(ctx, uid, mapper.IssueFlowInputFromProto(req))
+	if err != nil {
+		return nil, domainerrors.MapToGRPC(err, h.logger)
+	}
+	return mapper.IssueFlowToProto(res), nil
+}
+
 func (h *IssueHandler) ListProjects(ctx context.Context, req *issuesv1.ListProjectsRequest) (*issuesv1.ListProjectsResponse, error) {
 	uid, err := requireUserID(ctx)
 	if err != nil {
