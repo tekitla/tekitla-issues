@@ -348,7 +348,15 @@ func (m *mockTokenRepo) Resolve(ctx context.Context, hash []byte, now time.Time)
 
 // mockFlowRepo satisface port.FlowRepository.
 type mockFlowRepo struct {
-	listFn func(ctx context.Context, projectID string, labelIDs []string) ([]model.FlowIssue, error)
+	listFn   func(ctx context.Context, projectID string, labelIDs []string) ([]model.FlowIssue, error)
+	tracksFn func(ctx context.Context, projectID string, number int32, to time.Time) ([]model.SessionTrack, error)
+}
+
+func (m *mockFlowRepo) ListSessionTracks(ctx context.Context, projectID string, number int32, to time.Time) ([]model.SessionTrack, error) {
+	if m.tracksFn == nil {
+		return nil, nil
+	}
+	return m.tracksFn(ctx, projectID, number, to)
 }
 
 var _ port.FlowRepository = (*mockFlowRepo)(nil)

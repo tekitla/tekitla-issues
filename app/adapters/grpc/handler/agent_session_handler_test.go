@@ -88,7 +88,7 @@ func (m *memSessions) withName(s *model.AgentSession) *model.AgentSession {
 	return &c
 }
 
-func (m *memSessions) Report(_ context.Context, key model.SessionKey, now time.Time, plan func([]*model.AgentSession) model.ReportOutcome) (model.ReportOutcome, error) {
+func (m *memSessions) Report(_ context.Context, key model.SessionKey, now time.Time, plan func([]*model.AgentSession, map[string]bool) model.ReportOutcome) (model.ReportOutcome, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var existing []*model.AgentSession
@@ -98,7 +98,19 @@ func (m *memSessions) Report(_ context.Context, key model.SessionKey, now time.T
 			existing = append(existing, &c)
 		}
 	}
-	out := plan(existing)
+	m.store.mu.Lock()
+	history := map[string]bool{}
+	for _, t := range m.store.transitions {
+		history[t.SessionID] = true
+	}
+	m.store.mu.Unlock()
+	out := plan(existing, history)
+	m.store.mu.Lock()
+	m.store.transitions = append(m.store.transitions, out.Transitions...)
+	for _, u := range out.Upserts {
+		m.store.lastSeen[u.ID] = u.LastSeenAt
+	}
+	m.store.mu.Unlock()
 	for _, u := range out.Upserts {
 		c := *u
 		replaced := false

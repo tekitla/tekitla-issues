@@ -61,6 +61,28 @@ func (w WaitingOn) IsValid() bool {
 	return false
 }
 
+// WaitingReason es para qué espera una sesión a su persona (issue 036,
+// token espera_motivo). Vacío: sin motivo.
+type WaitingReason string
+
+// Motivos de una espera.
+const (
+	WaitingReasonNone     WaitingReason = ""
+	WaitingReasonReview   WaitingReason = "review"
+	WaitingReasonTesting  WaitingReason = "testing"
+	WaitingReasonDecision WaitingReason = "decision"
+	WaitingReasonDeploy   WaitingReason = "deploy"
+)
+
+// IsValid informa si es uno de los definidos (también sin motivo).
+func (r WaitingReason) IsValid() bool {
+	switch r {
+	case WaitingReasonNone, WaitingReasonReview, WaitingReasonTesting, WaitingReasonDecision, WaitingReasonDeploy:
+		return true
+	}
+	return false
+}
+
 // SessionSource es de dónde sale una sesión.
 type SessionSource string
 
@@ -139,6 +161,7 @@ type AgentSession struct {
 	WaitingOn       WaitingOn
 	WaitingTarget   string
 	WaitingText     string
+	WaitingReason   WaitingReason
 	StatusChangedAt time.Time
 	LastSeenAt      time.Time
 	StartedAt       time.Time
@@ -177,6 +200,7 @@ type ReportedSession struct {
 	WaitingOn      WaitingOn
 	WaitingTarget  string
 	WaitingText    string
+	WaitingReason  WaitingReason
 }
 
 // NormalizeMachine valida el nombre de la máquina.
@@ -283,8 +307,12 @@ func normalizeReported(s ReportedSession) (ReportedSession, error) {
 	if s.WaitingOn != WaitingSession && s.WaitingOn != WaitingOther {
 		s.WaitingTarget = ""
 	}
+	if !s.WaitingReason.IsValid() {
+		return s, invalid("waiting_reason", "invalid waiting_reason")
+	}
 	if s.WaitingOn == WaitingNone {
 		s.WaitingText = ""
+		s.WaitingReason = WaitingReasonNone
 	}
 	return s, nil
 }
@@ -318,6 +346,9 @@ type ReportOutcome struct {
 	Upserts []*AgentSession
 	// EndedIDs son las que pasan a ENDED por no venir en el reporte.
 	EndedIDs []string
+	// Transitions son las filas de historia que escribe el reporte (issue
+	// 036, PlanTransitions).
+	Transitions []SessionTransition
 }
 
 // SessionAgent es el agente de una sesión nueva o reabierta: lo resuelve el
@@ -367,6 +398,7 @@ func PlanReport(key SessionKey, existing []*AgentSession, reported []ReportedSes
 			WaitingOn:        r.WaitingOn,
 			WaitingTarget:    r.WaitingTarget,
 			WaitingText:      r.WaitingText,
+			WaitingReason:    r.WaitingReason,
 			LastSeenAt:       now,
 		}
 		if r.ProjectID == "" {
@@ -423,7 +455,7 @@ func sameReported(a, b *AgentSession) bool {
 		a.SessionName == b.SessionName && a.WorkspaceLabel == b.WorkspaceLabel &&
 		a.ProjectID == b.ProjectID && a.IssueNumber == b.IssueNumber && a.Link == b.Link &&
 		a.Status == b.Status && a.WaitingOn == b.WaitingOn && a.WaitingTarget == b.WaitingTarget &&
-		a.WaitingText == b.WaitingText
+		a.WaitingText == b.WaitingText && a.WaitingReason == b.WaitingReason
 }
 
 // IssueSessions es el resumen de las sesiones activas de un issue.

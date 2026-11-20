@@ -46,6 +46,10 @@ type memStore struct {
 	actors     []*model.Actor
 	tokens     []*memToken
 	shareLinks []*memShareLink
+	// Historia de sesiones (036): la escribe memSessions.Report y la lee
+	// memFlow.ListSessionTracks, con el último reporte de cada sesión.
+	transitions []model.SessionTransition
+	lastSeen    map[string]time.Time
 }
 
 func newMemStore() *memStore {
@@ -53,6 +57,7 @@ func newMemStore() *memStore {
 		workspaces: map[string]*model.Workspace{},
 		projects:   map[string]*model.Project{},
 		next:       map[string]int32{},
+		lastSeen:   map[string]time.Time{},
 	}
 }
 

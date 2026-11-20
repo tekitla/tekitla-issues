@@ -35,6 +35,7 @@ type agentSessionRow struct {
 	WaitingOn        string     `gorm:"column:waiting_on"`
 	WaitingTarget    string     `gorm:"column:waiting_target"`
 	WaitingText      string     `gorm:"column:waiting_text"`
+	WaitingReason    string     `gorm:"column:waiting_reason"`
 	StatusChangedAt  time.Time  `gorm:"column:status_changed_at"`
 	LastSeenAt       time.Time  `gorm:"column:last_seen_at"`
 	StartedAt        time.Time  `gorm:"column:started_at"`
@@ -52,7 +53,7 @@ const sessionSelect = `SELECT s.*, a.display_name AS agent_display_name
 var sessionUpsertColumns = []string{
 	"agent_actor_id", "tool", "cwd_rel", "session_name", "workspace_label", "project_id",
 	"issue_number", "link", "status", "waiting_on", "waiting_target", "waiting_text",
-	"status_changed_at", "last_seen_at", "started_at", "ended_at",
+	"waiting_reason", "status_changed_at", "last_seen_at", "started_at", "ended_at",
 }
 
 // sessionCursor: orden (last_seen_at DESC, id DESC).
@@ -112,7 +113,7 @@ func (r *AgentSessionRepository) FindAgent(ctx context.Context, ownerID string, 
 
 // Report aplica el reporte con un advisory lock de transacción sobre la
 // clave: dos reportes de la misma máquina no se cruzan.
-func (r *AgentSessionRepository) Report(ctx context.Context, key model.SessionKey, now time.Time, plan func(existing []*model.AgentSession) model.ReportOutcome) (model.ReportOutcome, error) {
+func (r *AgentSessionRepository) Report(ctx context.Context, key model.SessionKey, now time.Time, plan func(existing []*model.AgentSession, history map[string]bool) model.ReportOutcome) (model.ReportOutcome, error) {
 	details := map[string]any{"machine": key.Machine}
 	var out model.ReportOutcome
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -129,7 +130,22 @@ func (r *AgentSessionRepository) Report(ctx context.Context, key model.SessionKe
 		for i := range rows {
 			existing[i] = fromSessionRow(&rows[i])
 		}
-		out = plan(existing)
+		history := map[string]bool{}
+		if len(rows) > 0 {
+			ids := make([]string, len(rows))
+			for i := range rows {
+				ids[i] = rows[i].ID
+			}
+			var withHistory []string
+			if err := tx.Raw(`SELECT DISTINCT session_id FROM issues.agent_session_transitions WHERE session_id IN ?`, ids).
+				Scan(&withHistory).Error; err != nil {
+				return err
+			}
+			for _, id := range withHistory {
+				history[id] = true
+			}
+		}
+		out = plan(existing, history)
 		if len(out.Upserts) > 0 {
 			// Un solo INSERT … ON CONFLICT para todo el reporte (hasta 200).
 			rows := make([]*agentSessionRow, len(out.Upserts))
@@ -144,11 +160,20 @@ func (r *AgentSessionRepository) Report(ctx context.Context, key model.SessionKe
 				return err
 			}
 		}
+		if len(out.Transitions) > 0 {
+			trs := make([]*sessionTransitionRow, len(out.Transitions))
+			for i, t := range out.Transitions {
+				trs[i] = toTransitionRow(t)
+			}
+			if err := tx.Omit("seq").Create(&trs).Error; err != nil {
+				return err
+			}
+		}
 		if len(out.EndedIDs) > 0 {
 			err := tx.Exec(
 				`UPDATE issues.agent_sessions
 				    SET status = 'ended', ended_at = ?, status_changed_at = ?,
-				        waiting_on = 'none', waiting_target = '', waiting_text = ''
+				        waiting_on = 'none', waiting_target = '', waiting_text = '', waiting_reason = ''
 				  WHERE id IN ? AND status <> 'ended'`,
 				now, now, out.EndedIDs,
 			).Error
@@ -274,6 +299,7 @@ func toSessionRow(m *model.AgentSession) *agentSessionRow {
 		WaitingOn:       string(m.WaitingOn),
 		WaitingTarget:   m.WaitingTarget,
 		WaitingText:     m.WaitingText,
+		WaitingReason:   string(m.WaitingReason),
 		StatusChangedAt: m.StatusChangedAt,
 		LastSeenAt:      m.LastSeenAt,
 		StartedAt:       m.StartedAt,
@@ -304,6 +330,7 @@ func fromSessionRow(r *agentSessionRow) *model.AgentSession {
 		WaitingOn:        model.WaitingOn(r.WaitingOn),
 		WaitingTarget:    r.WaitingTarget,
 		WaitingText:      r.WaitingText,
+		WaitingReason:    model.WaitingReason(r.WaitingReason),
 		StatusChangedAt:  r.StatusChangedAt.UTC(),
 		LastSeenAt:       r.LastSeenAt.UTC(),
 		StartedAt:        r.StartedAt.UTC(),
@@ -319,4 +346,45 @@ func fromSessionRow(r *agentSessionRow) *model.AgentSession {
 		m.EndedAt = &t
 	}
 	return m
+}
+
+// sessionTransitionRow es una fila de issues.agent_session_transitions
+// (issue 036, 000011): la historia de una sesión.
+type sessionTransitionRow struct {
+	SessionID     string    `gorm:"column:session_id;type:uuid"`
+	Seq           int64     `gorm:"column:seq"`
+	At            time.Time `gorm:"column:at"`
+	Status        string    `gorm:"column:status"`
+	WaitingOn     string    `gorm:"column:waiting_on"`
+	WaitingReason string    `gorm:"column:waiting_reason"`
+	ProjectID     *string   `gorm:"column:project_id;type:uuid"`
+	IssueNumber   *int32    `gorm:"column:issue_number"`
+}
+
+func (sessionTransitionRow) TableName() string { return "issues.agent_session_transitions" }
+
+func toTransitionRow(t model.SessionTransition) *sessionTransitionRow {
+	row := &sessionTransitionRow{
+		SessionID: t.SessionID, At: t.At, Status: string(t.Status),
+		WaitingOn: string(t.WaitingOn), WaitingReason: string(t.WaitingReason),
+	}
+	if t.ProjectID != "" {
+		pid, n := t.ProjectID, t.IssueNumber
+		row.ProjectID, row.IssueNumber = &pid, &n
+	}
+	return row
+}
+
+func fromTransitionRow(r *sessionTransitionRow) model.SessionTransition {
+	t := model.SessionTransition{
+		SessionID: r.SessionID, At: r.At.UTC(), Status: model.SessionStatus(r.Status),
+		WaitingOn: model.WaitingOn(r.WaitingOn), WaitingReason: model.WaitingReason(r.WaitingReason),
+	}
+	if r.ProjectID != nil {
+		t.ProjectID = *r.ProjectID
+	}
+	if r.IssueNumber != nil {
+		t.IssueNumber = *r.IssueNumber
+	}
+	return t
 }

@@ -134,3 +134,49 @@ func (r *FlowRepository) ListFlowIssues(ctx context.Context, projectID string, l
 	}
 	return out, nil
 }
+
+// ListSessionTracks: ver port.FlowRepository. Dos consultas: las sesiones
+// que alguna vez se ligaron al proyecto (o al issue) y toda su historia
+// anterior a to (índice agent_session_transitions_issue_idx y la PK).
+func (r *FlowRepository) ListSessionTracks(ctx context.Context, projectID string, number int32, to time.Time) ([]model.SessionTrack, error) {
+	details := map[string]any{"project_id": projectID}
+	db := r.db.WithContext(ctx)
+	q := `SELECT s.id, s.last_seen_at FROM issues.agent_sessions s
+	       WHERE EXISTS (SELECT 1 FROM issues.agent_session_transitions t
+	                      WHERE t.session_id = s.id AND t.project_id = ?`
+	args := []any{projectID}
+	if number > 0 {
+		q += ` AND t.issue_number = ?`
+		args = append(args, number)
+	}
+	q += `) ORDER BY s.id`
+	var sessions []struct {
+		ID         string
+		LastSeenAt time.Time
+	}
+	if err := db.Raw(q, args...).Scan(&sessions).Error; err != nil {
+		return nil, translateError(err, "flow", "list sessions", details)
+	}
+	if len(sessions) == 0 {
+		return nil, nil
+	}
+	ids := make([]string, len(sessions))
+	tracks := make([]model.SessionTrack, len(sessions))
+	index := make(map[string]int, len(sessions))
+	for i, s := range sessions {
+		ids[i] = s.ID
+		tracks[i] = model.SessionTrack{SessionID: s.ID, LastSeenAt: s.LastSeenAt.UTC()}
+		index[s.ID] = i
+	}
+	var rows []sessionTransitionRow
+	err := db.Raw(`SELECT * FROM issues.agent_session_transitions
+	                WHERE session_id IN ? AND at < ? ORDER BY session_id, at, seq`, ids, to).Scan(&rows).Error
+	if err != nil {
+		return nil, translateError(err, "flow", "list session transitions", details)
+	}
+	for i := range rows {
+		k := index[rows[i].SessionID]
+		tracks[k].Transitions = append(tracks[k].Transitions, fromTransitionRow(&rows[i]))
+	}
+	return tracks, nil
+}

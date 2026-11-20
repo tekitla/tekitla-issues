@@ -118,8 +118,10 @@ func (s *AgentSessionService) Report(ctx context.Context, uid string, in ReportI
 	}
 
 	key := model.SessionKey{OwnerActorID: person.ID, Source: in.Source, Machine: machine}
-	out, err := s.sessions.Report(ctx, key, now, func(existing []*model.AgentSession) model.ReportOutcome {
-		return model.PlanReport(key, existing, reported, agents, now, uuid.NewString)
+	out, err := s.sessions.Report(ctx, key, now, func(existing []*model.AgentSession, history map[string]bool) model.ReportOutcome {
+		out := model.PlanReport(key, existing, reported, agents, now, uuid.NewString)
+		out.Transitions = model.PlanTransitions(existing, history, out, now, s.stallAfter)
+		return out
 	})
 	if err != nil {
 		return nil, err

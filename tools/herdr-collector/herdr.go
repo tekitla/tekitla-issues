@@ -97,10 +97,14 @@ func translate(cfg config, agents []herdrAgent, workspaces map[string]string) []
 		}
 		s.WaitingOn, s.WaitingTarget = waitingOf(a.Tokens)
 		s.WaitingTarget = clip(s.WaitingTarget, 80)
+		if s.WaitingOn != issuesv1.WaitingOn_WAITING_ON_NONE {
+			s.WaitingReason = reasonOf(a.Tokens["espera_motivo"])
+		}
 		// Un panel que trabaja no espera (CU-026-12): el token puede ser de
 		// un turno anterior. El servicio aplica la misma regla.
 		if s.Status == issuesv1.SessionStatus_SESSION_STATUS_WORKING || s.Status == issuesv1.SessionStatus_SESSION_STATUS_ENDED {
 			s.WaitingOn, s.WaitingTarget, s.WaitingText = issuesv1.WaitingOn_WAITING_ON_NONE, "", ""
+			s.WaitingReason = issuesv1.WaitingReason_WAITING_REASON_UNSPECIFIED
 		}
 		s.ProjectKey, s.IssueNumber, s.Link = link(cfg, a.Name, s.WorkspaceLabel, s.CwdRel)
 		out = append(out, s)
@@ -144,6 +148,23 @@ func statusOf(s string) issuesv1.SessionStatus {
 		return issuesv1.SessionStatus_SESSION_STATUS_IDLE
 	}
 	return issuesv1.SessionStatus_SESSION_STATUS_UNKNOWN
+}
+
+// reasonOf traduce el token espera_motivo de espera.ps1 -Motivo (issue 036).
+// Un valor desconocido va sin motivo: el script lo rechaza, pero un panel
+// viejo o escrito a mano no puede hacer fallar el reporte.
+func reasonOf(motivo string) issuesv1.WaitingReason {
+	switch strings.ToLower(strings.TrimSpace(motivo)) {
+	case "revision":
+		return issuesv1.WaitingReason_WAITING_REASON_REVIEW
+	case "pruebas":
+		return issuesv1.WaitingReason_WAITING_REASON_TESTING
+	case "decision":
+		return issuesv1.WaitingReason_WAITING_REASON_DECISION
+	case "deploy":
+		return issuesv1.WaitingReason_WAITING_REASON_DEPLOY
+	}
+	return issuesv1.WaitingReason_WAITING_REASON_UNSPECIFIED
 }
 
 var esperaAPrefix = regexp.MustCompile(`^⏳\s*espera a\s+(.+)$`)
